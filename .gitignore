@@ -32,6 +32,9 @@ outputs/
 # figures/
 # *.png
 
+# Claude Code local (per-machine) settings
+.claude/settings.local.json
+
 # OS / editor
 .DS_Store
 .idea/
