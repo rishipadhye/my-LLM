@@ -1,0 +1,57 @@
+# =============================================================================
+# Config template for the TinyStories LM.
+#
+# This is scaffolding — the FIELDS and STRUCTURE are a starting point. The
+# values (architecture size, hyperparameters, ablation switches) are yours to
+# decide and tune; they're filled with reasonable defaults so the file parses.
+#
+# Param-count intuition for a decoder-only transformer (tied embeddings):
+#   embedding    ≈ vocab_size * d_model
+#   per block    ≈ 4 * d_model^2  (attention QKVO)  +  2 * d_model * d_ff  (MLP)
+#   total        ≈ embedding + n_layers * per_block
+# With the defaults below that lands around ~30M non-embedding-heavy params.
+# Recompute this yourself once model.py exists — don't trust the comment.
+# =============================================================================
+
+run_name: tiny
+
+model:
+  vocab_size: 8192        # must match what tokenizer.py produces
+  d_model: 512
+  n_layers: 8
+  n_heads: 8
+  d_ff: 2048              # MLP hidden dim (often 4 * d_model)
+  context_len: 512        # max sequence length
+  dropout: 0.0
+  tie_embeddings: true
+  # --- ablation knobs ---
+  norm_type: rmsnorm      # rmsnorm | layernorm
+  norm_position: pre      # pre | post
+  pos_encoding: rope      # rope | learned | sinusoidal  (whatever you implement)
+
+optim:
+  lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+
+schedule:
+  warmup_steps: 100       # ablation target
+  max_steps: 5000
+  min_lr_ratio: 0.1       # cosine decays to min_lr_ratio * lr
+
+data:
+  dataset: roneneldan/TinyStories
+  tokenizer_path: tokenizer/tinystories.json
+  batch_size: 32
+  grad_accum_steps: 1
+
+train:
+  seed: 1337
+  device: cuda
+  dtype: bfloat16         # T4 has no bf16; you may need float16 + grad scaler
+  eval_interval: 250
+  eval_steps: 100
+  log_interval: 10
+  checkpoint_dir: checkpoints
+  out_dir: outputs

@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data, tokenizers, checkpoints, logs (large / regenerable)
+data/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors
+tokenizer/
+*.model
+*.vocab
+logs/
+runs/
+wandb/
+outputs/
+
+# Plots (regenerable from logs) — comment out if you want to commit figures
+# figures/
+# *.png
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

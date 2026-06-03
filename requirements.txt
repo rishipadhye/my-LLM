@@ -1,0 +1,21 @@
+# Core ML — torch and numpy come preinstalled on Kaggle (with CUDA for the T4),
+# so you usually do NOT pip-install torch there. Pins below are for a local env;
+# on Kaggle, prefer the preinstalled build to keep CUDA compatibility.
+# torch>=2.2,<2.6
+numpy>=1.26,<2.1
+
+# Tokenizer training (BPE) + dataset loading
+tokenizers>=0.15
+datasets>=2.18
+
+# Config, progress, plotting
+PyYAML>=6.0
+tqdm>=4.66
+matplotlib>=3.8
+
+# Optional experiment tracking — uncomment if you use it
+# wandb>=0.16
+
+# Dev / formatting (optional)
+# ruff>=0.4
+# black>=24.0
