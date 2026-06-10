@@ -1,57 +1,36 @@
 # =============================================================================
-# Config template for the TinyStories LM.
+# tiny.yaml — flat hyperparameter config for the TinyStories LM.
 #
-# This is scaffolding — the FIELDS and STRUCTURE are a starting point. The
-# values (architecture size, hyperparameters, ablation switches) are yours to
-# decide and tune; they're filled with reasonable defaults so the file parses.
-#
-# Param-count intuition for a decoder-only transformer (tied embeddings):
-#   embedding    ≈ vocab_size * d_model
-#   per block    ≈ 4 * d_model^2  (attention QKVO)  +  2 * d_model * d_ff  (MLP)
-#   total        ≈ embedding + n_layers * per_block
-# With the defaults below that lands around ~30M non-embedding-heavy params.
-# Recompute this yourself once model.py exists — don't trust the comment.
+# De-conflicted from the requested list. Where two values collided, one was
+# chosen (see notes); soft suggestions are left as inline comments so you can
+# decide. Loaded via src/config.py -> load_config("configs/tiny.yaml").
 # =============================================================================
 
 run_name: tiny
 
-model:
-  vocab_size: 8192        # must match what tokenizer.py produces
-  d_model: 512
-  n_layers: 8
-  n_heads: 8
-  d_ff: 2048              # MLP hidden dim (often 4 * d_model)
-  context_len: 512        # max sequence length
-  dropout: 0.0
-  tie_embeddings: true
-  # --- ablation knobs ---
-  norm_type: rmsnorm      # rmsnorm | layernorm
-  norm_position: pre      # pre | post
-  pos_encoding: rope      # rope | learned | sinusoidal  (whatever you implement)
+# --- model ---------------------------------------------------------------
+hidden_size: 128            # (was given as both model_dim=128 and hidden_size=768;
+                            #  kept the 128 "tiny" model — 768 is a separate ~120M model)
+num_layers: 4
+num_attention_heads: 4      # head_dim = 128/4 = 32
+ffn_hidden_size: 512        # 4 * hidden_size  (3072 belonged to the 768-dim model)
+context_length: 2048        # SUGGEST: TinyStories are short; 256-512 is plenty and
+                            #          you only ever train at seq_len below
+seq_len: 128                # training window
+vocab_size: 16000           # SUGGEST: 8k-16k for TinyStories; 50k makes embeddings
+                            #          dominate a ~30M budget
+dropout_rate: 0.1           # SUGGEST: 0.0 is common when data >> params
+activation_function: gelu   # SUGGEST: gelu (standard for GPT-style decoders)
 
-optim:
-  lr: 3.0e-4
-  weight_decay: 0.1
-  betas: [0.9, 0.95]
-  grad_clip: 1.0
+# --- optimization --------------------------------------------------------
+optimizer: AdamW
+learning_rate: 3.0e-4
+weight_decay: 0.01          # NOTE: 0.1 is the more common transformer default
+gradient_clip_norm: 1.0
 
-schedule:
-  warmup_steps: 100       # ablation target
-  max_steps: 5000
-  min_lr_ratio: 0.1       # cosine decays to min_lr_ratio * lr
+# --- schedule ------------------------------------------------------------
+warmup_steps: 100           # chosen over 1000 (1000/2000 = 50% warmup is too much)
+total_steps: 2000           # step-based training (dropped the blank num_epochs)
 
-data:
-  dataset: roneneldan/TinyStories
-  tokenizer_path: tokenizer/tinystories.json
-  batch_size: 32
-  grad_accum_steps: 1
-
-train:
-  seed: 1337
-  device: cuda
-  dtype: bfloat16         # T4 has no bf16; you may need float16 + grad scaler
-  eval_interval: 250
-  eval_steps: 100
-  log_interval: 10
-  checkpoint_dir: checkpoints
-  out_dir: outputs
+# --- data / runtime ------------------------------------------------------
+batch_size: 32              # chosen over 64

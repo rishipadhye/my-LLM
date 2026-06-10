@@ -13,8 +13,8 @@ PyYAML>=6.0
 tqdm>=4.66
 matplotlib>=3.8
 
-# Optional experiment tracking — uncomment if you use it
-# wandb>=0.16
+# Experiment tracking
+wandb>=0.16
 
 # Dev / formatting (optional)
 # ruff>=0.4
