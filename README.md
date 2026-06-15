@@ -27,6 +27,7 @@ my-LLM/
 ├── configs/              # YAML experiment configs (see configs/tiny.yaml)
 ├── notebooks/            # exploration / scratch
 ├── scripts/
+│   ├── dataset_stats.py  # inspect raw TinyStories (counts, char stats, samples)
 │   ├── prepare_data.py   # download + tokenize TinyStories
 │   └── generate.py       # sample text from a trained checkpoint
 ├── src/
@@ -62,8 +63,14 @@ pip install tokenizers datasets pyyaml tqdm matplotlib
 <!-- Fill these in as the scripts take shape. -->
 
 ```bash
+# 0. (optional) Inspect the raw dataset: story count, char stats, samples
+python scripts/dataset_stats.py
+
 # 1. Prepare data (download + train tokenizer + tokenize corpus)
 python scripts/prepare_data.py --config configs/tiny.yaml
+
+# 1b. (optional) Sanity-check the trained tokenizer: vocab size + encode/decode round-trip
+python -m src.tokenizer
 
 # 2. Train
 python -m src.train --config configs/tiny.yaml
