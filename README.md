@@ -9,6 +9,25 @@ The goal is to understand transformers deeply by implementing the core pieces by
 hand — model, training loop, data pipeline, and tokenizer — and then running a
 set of controlled experiments, ending in a technical write-up.
 
+## Highlights
+
+- **From scratch, no shortcuts.** The transformer is built directly on PyTorch
+  tensor ops — embeddings, multi-head causal self-attention, and the training
+  loop are hand-written, with no `nn.Transformer` or HuggingFace `model` classes
+  doing the heavy lifting.
+- **Multi-head attention done the clean way.** Heads are vectorized into a
+  single batched matmul (reshape Q/K/V to `(batch, num_heads, seq, head_dim)`)
+  rather than looped — the same approach production implementations use.
+- **Built bottom-up and tested in isolation.** Each component is its own
+  `nn.Module` with a runnable smoke test asserting tensor shapes, so building
+  blocks snap together against a known `(batch, seq_len, hidden_size)` contract.
+- **Config-driven and reproducible.** Hyperparameters live in versioned YAML
+  configs; a fixed seed keeps weights and inputs deterministic during
+  development.
+- **Designed for a real compute budget.** ~30M params targeting a single free
+  Kaggle T4 — small enough to iterate fast, large enough to produce coherent
+  text.
+
 ## Goals
 
 - Implement a decoder-only transformer end to end, no high-level model libraries.
@@ -19,6 +38,21 @@ set of controlled experiments, ending in a technical write-up.
   - (add others as you go)
 - Run a small **scaling experiment** (model size / data / compute vs loss).
 - Write it all up as a technical blog post.
+
+## Build progress
+
+Implemented and smoke-tested so far:
+
+- [x] BPE tokenizer training + encode/decode round-trip checks
+- [x] Dataset inspection (story counts, char stats, samples)
+- [x] YAML config loader (attribute + item access)
+- [x] Token + learned-position embeddings
+- [x] Multi-head causal self-attention (vectorized across heads)
+- [ ] Feed-forward network + full transformer block
+- [ ] GPT wrapper (stacked blocks + LM head)
+- [ ] Training loop (AdamW, warmup, gradient clipping)
+- [ ] Sampling / generation
+- [ ] Ablations, scaling study, and write-up
 
 ## Project structure
 
