@@ -48,7 +48,8 @@ Implemented and smoke-tested so far:
 - [x] YAML config loader (attribute + item access)
 - [x] Token + learned-position embeddings
 - [x] Multi-head causal self-attention (vectorized across heads)
-- [ ] Feed-forward network + full transformer block
+- [x] Position-wise feed-forward network (GeLU, `d_ff` = 4 × hidden_size)
+- [ ] Full transformer block (attention + FFN + residuals + norm)
 - [ ] GPT wrapper (stacked blocks + LM head)
 - [ ] Training loop (AdamW, warmup, gradient clipping)
 - [ ] Sampling / generation

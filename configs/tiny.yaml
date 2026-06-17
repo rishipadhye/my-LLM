@@ -13,7 +13,7 @@ hidden_size: 128            # (was given as both model_dim=128 and hidden_size=7
                             #  kept the 128 "tiny" model — 768 is a separate ~120M model)
 num_layers: 4
 num_attention_heads: 4      # head_dim = 128/4 = 32
-ffn_hidden_size: 512        # 4 * hidden_size  (3072 belonged to the 768-dim model)
+d_ff: 512                   # FFN intermediate width, 4 * hidden_size  (3072 belonged to the 768-dim model)
 context_length: 2048        # SUGGEST: TinyStories are short; 256-512 is plenty and
                             #          you only ever train at seq_len below
 seq_len: 128                # training window

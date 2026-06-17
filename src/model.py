@@ -117,10 +117,41 @@ class SelfAttention(nn.Module):
         out = self.proj(out)  # (batch, T, hidden_size)
         return out
 
+class FeedForward(nn.Module):
+    """Position-wise feed-forward network: the per-token half of a block.
+
+    Attention mixes information *across* tokens (each token looks back at
+    earlier ones). This module does the opposite: it processes every token's
+    vector independently and identically, with no looking sideways. Intuitively,
+    once attention has gathered context into a token, the FFN is where the model
+    "thinks" about what it gathered.
+
+    It widens the channel dim to d_ff, applies a non-linearity in that larger
+    space, then projects back down to hidden_size:
+        (batch, seq_len, hidden_size) -> (..., d_ff) -> (batch, seq_len, hidden_size)
+    The wider intermediate (conventionally d_ff = 4 * hidden_size) gives the
+    non-linearity room to work; returning to hidden_size keeps the output shape
+    matched to the residual stream so blocks stack cleanly.
+    """
+
+    def __init__(self, hidden_size, d_ff):
+        super().__init__()
+        self.fc1 = nn.Linear(hidden_size, d_ff)  # up-projection:   hidden_size -> d_ff
+        self.act = nn.GELU()                     # smooth non-linearity (GPT-style)
+        self.fc2 = nn.Linear(d_ff, hidden_size)  # down-projection: d_ff -> hidden_size
+
+    def forward(self, x):
+        # x: (batch, seq_len, hidden_size). Linear acts on the last dim only, so
+        # batch and seq_len pass through untouched -- this is the per-token part.
+        x = self.fc1(x)   # (batch, seq_len, d_ff)
+        x = self.act(x)   # (batch, seq_len, d_ff)
+        x = self.fc2(x)   # (batch, seq_len, hidden_size)
+        return x
 
 cfg = load_config("configs/tiny.yaml")
 model = Embeddings(cfg.vocab_size, cfg.hidden_size, cfg.seq_len)
 attention = SelfAttention(cfg.hidden_size, cfg.num_attention_heads)
+feed_forward = FeedForward(cfg.hidden_size, cfg.d_ff)
 
 
 if __name__ == "__main__":
@@ -142,3 +173,12 @@ if __name__ == "__main__":
     print("attn out shape:", tuple(out.shape))
     assert out.shape == (B, T, cfg.hidden_size), out.shape
     print("OK: attention returns (batch, seq_len, hidden_size)")
+
+    # --- FeedForward: widens to d_ff then must round-trip back to hidden_size -
+    # Per-token transform, so the (B, T, hidden_size) shape in must equal shape out.
+    x_ffn = torch.randn(B, T, cfg.hidden_size)
+    out = feed_forward(x_ffn)
+    print("ffn out shape:", tuple(out.shape))
+    assert out.shape == (B, T, cfg.hidden_size), out.shape
+    print("OK: feed-forward returns (batch, seq_len, hidden_size)")
+
