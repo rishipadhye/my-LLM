@@ -1,10 +1,16 @@
-"""Model components for the TinyStories LM.
+"""Model for the TinyStories LM: a from-scratch decoder-only transformer.
 
-Built bottom-up, one nn.Module per building block so each can be tested in
-isolation: token+position embeddings first, then multi-head causal
-self-attention. Later layers (FFN, full transformer block, the GPT wrapper)
-slot in by reusing the same (batch, seq_len, hidden_size) tensor shape, so the
-blocks snap together in sequence.
+Built bottom-up, one nn.Module per building block, each reusing the same
+(batch, seq_len, hidden_size) tensor shape so they snap together in sequence:
+
+    Embeddings        token + learned-position lookup
+    SelfAttention     multi-head causal self-attention (vectorized over heads)
+    FeedForward       position-wise MLP (GeLU, d_ff = 4 x hidden_size)
+    TransformerBlock  pre-norm attention + FFN sublayers, each with a residual
+    GPT               embeddings -> N blocks -> final norm -> LM head -> logits
+
+Run `python src/model.py` to execute the smoke + gradient-flow tests at the
+bottom of this file.
 """
 
 import torch
@@ -147,38 +153,91 @@ class FeedForward(nn.Module):
         x = self.act(x)   # (batch, seq_len, d_ff)
         x = self.fc2(x)   # (batch, seq_len, hidden_size)
         return x
+    
+class TransformerBlock(nn.Module):
+    def __init__(self, hidden_size, num_heads, d_ff):
+        super().__init__()
+        self.attn = SelfAttention(hidden_size, num_heads)
+        self.ffn = FeedForward(hidden_size, d_ff)
+        self.norm_attn = nn.LayerNorm(hidden_size)
+        self.norm_ffn = nn.LayerNorm(hidden_size)    
+
+    def forward(self, x):
+        x = x + self.attn(self.norm_attn(x))
+        x = x + self.ffn(self.norm_ffn(x))
+        return x
+    
+class GPT(nn.Module):
+    def __init__(self, vocab_size, hidden_size, seq_len, num_heads, d_ff, num_layers):
+        super().__init__()
+        self.embeddings = Embeddings(vocab_size, hidden_size, seq_len)
+        self.blocks = nn.ModuleList([TransformerBlock(hidden_size, num_heads, d_ff) for _ in range(num_layers)])
+        self.norm_final = nn.LayerNorm(hidden_size)
+        self.head = nn.Linear(hidden_size, vocab_size)
+        self.vocab_size = vocab_size
+        self.hidden_size = hidden_size
+        self.seq_len = seq_len
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.num_layers = num_layers
+    
+    def forward(self, idx):
+        x = self.embeddings(idx)
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm_final(x)
+        logits = self.head(x)
+        return logits
+
+def test_gradient_flow():
+    """Confirm the whole model is trainable end to end.
+
+    Stronger than a shape check: builds a tiny throwaway GPT, runs a forward
+    pass, collapses the logits to a scalar with .sum() (backward needs a
+    scalar; summing routes gradient to every logit), and backprops. Then it
+    asserts every parameter received a *non-zero* gradient. A None grad means a
+    param is disconnected from the graph -- exactly the symptom of a plain list
+    instead of nn.ModuleList, or a sublayer built in __init__ but never used in
+    forward. named_parameters() surfaces which param if one fails.
+    """
+    m = GPT(vocab_size=50, hidden_size=16, seq_len=8, num_heads=2, d_ff=32, num_layers=2)
+
+    B, T = 4, 8
+    idx = torch.randint(0, 50, (B, T))  # fake token IDs
+
+    logits = m(idx)
+    assert logits.shape == (B, T, 50), logits.shape
+
+    loss = logits.sum()  # scalar so backward() has something to differentiate
+    loss.backward()
+
+    for name, p in m.named_parameters():
+        assert p.grad is not None, f"no grad for {name}"
+        assert p.grad.abs().sum() > 0, f"zero grad for {name}"
+
+    print("OK: gradients flow to all parameters")
 
 cfg = load_config("configs/tiny.yaml")
-model = Embeddings(cfg.vocab_size, cfg.hidden_size, cfg.seq_len)
-attention = SelfAttention(cfg.hidden_size, cfg.num_attention_heads)
-feed_forward = FeedForward(cfg.hidden_size, cfg.d_ff)
+gpt = GPT(cfg.vocab_size, cfg.hidden_size, cfg.seq_len,
+          cfg.num_attention_heads, cfg.d_ff, cfg.num_layers)
 
 
 if __name__ == "__main__":
-    # --- Embeddings: check output shape on a fake batch of token IDs ---------
+    # --- GPT end-to-end: token IDs in, per-position vocab logits out ----------
+    # One pass exercises every component transitively (embeddings, all blocks'
+    # attention + FFN + norms, final norm, LM head), so this single shape check
+    # subsumes the per-component shape tests.
     batch, seq_len = 2, cfg.seq_len
-    x = torch.randint(0, cfg.vocab_size, (batch, seq_len))  # fake token IDs
-    out = model(x)
-    print("input  shape:", tuple(x.shape))
-    print("output shape:", tuple(out.shape))
-    assert out.shape == (batch, seq_len, cfg.hidden_size), out.shape
-    print("OK: embeddings return (batch, seq_len, hidden_size)")
+    idx = torch.randint(0, cfg.vocab_size, (batch, seq_len))  # fake token IDs
+    logits = gpt(idx)
+    print("gpt out shape:", tuple(logits.shape))
+    assert logits.shape == (batch, seq_len, cfg.vocab_size), logits.shape
+    print("OK: GPT returns (batch, seq_len, vocab_size)")
 
-    # --- Attention: tiny B=1, T=4 case to eyeball the causal mask ------------
-    # On real embeddings this would be the Embeddings output; randn stands in.
-    B = 1
-    T = 4
-    x_attn = torch.randn(B, T, cfg.hidden_size)
-    out = attention(x_attn)
-    print("attn out shape:", tuple(out.shape))
-    assert out.shape == (B, T, cfg.hidden_size), out.shape
-    print("OK: attention returns (batch, seq_len, hidden_size)")
+    # --- Parameter count: sanity-check the ~budget. Also a wiring check: a
+    # missing nn.ModuleList / self. would silently drop blocks from this sum.
+    n_params = sum(p.numel() for p in gpt.parameters())
+    print(f"params: {n_params / 1e6:.1f}M")
 
-    # --- FeedForward: widens to d_ff then must round-trip back to hidden_size -
-    # Per-token transform, so the (B, T, hidden_size) shape in must equal shape out.
-    x_ffn = torch.randn(B, T, cfg.hidden_size)
-    out = feed_forward(x_ffn)
-    print("ffn out shape:", tuple(out.shape))
-    assert out.shape == (B, T, cfg.hidden_size), out.shape
-    print("OK: feed-forward returns (batch, seq_len, hidden_size)")
-
+    # --- Gradient flow: every param must receive a non-zero grad after backward.
+    test_gradient_flow()

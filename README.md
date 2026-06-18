@@ -18,9 +18,10 @@ set of controlled experiments, ending in a technical write-up.
 - **Multi-head attention done the clean way.** Heads are vectorized into a
   single batched matmul (reshape Q/K/V to `(batch, num_heads, seq, head_dim)`)
   rather than looped — the same approach production implementations use.
-- **Built bottom-up and tested in isolation.** Each component is its own
-  `nn.Module` with a runnable smoke test asserting tensor shapes, so building
-  blocks snap together against a known `(batch, seq_len, hidden_size)` contract.
+- **Built bottom-up and tested as it grows.** Each component is its own
+  `nn.Module` snapping together against a known `(batch, seq_len, hidden_size)`
+  contract, covered by a runnable end-to-end shape test plus a gradient-flow
+  test that proves the whole model is trainable (see [Tests](#tests)).
 - **Config-driven and reproducible.** Hyperparameters live in versioned YAML
   configs; a fixed seed keeps weights and inputs deterministic during
   development.
@@ -49,11 +50,41 @@ Implemented and smoke-tested so far:
 - [x] Token + learned-position embeddings
 - [x] Multi-head causal self-attention (vectorized across heads)
 - [x] Position-wise feed-forward network (GeLU, `d_ff` = 4 × hidden_size)
-- [ ] Full transformer block (attention + FFN + residuals + norm)
-- [ ] GPT wrapper (stacked blocks + LM head)
+- [x] Full transformer block (pre-norm attention + FFN, residual connections)
+- [x] GPT wrapper (stacked blocks + final norm + LM head → logits)
 - [ ] Training loop (AdamW, warmup, gradient clipping)
 - [ ] Sampling / generation
 - [ ] Ablations, scaling study, and write-up
+
+## Tests
+
+The model has no external test runner yet — tests live in each module's
+`__main__` block and run on execution. For the model:
+
+```bash
+python src/model.py
+```
+
+This runs three checks against the `configs/tiny.yaml` model:
+
+| Check | What it verifies |
+| --- | --- |
+| **End-to-end shape** | A `(batch, seq_len)` batch of token IDs produces logits of shape `(batch, seq_len, vocab_size)`. One forward pass exercises embeddings, every block's attention + FFN + norms, the final norm, and the LM head. |
+| **Parameter count** | Reports total params (≈ budget). Doubles as a wiring check: a plain `list` instead of `nn.ModuleList`, or a submodule not assigned to `self.`, would silently drop blocks from the count. |
+| **Gradient flow** | Builds a tiny throwaway GPT, backprops `logits.sum()`, and asserts every parameter receives a *non-zero* gradient — i.e. the whole model is connected to the autograd graph and trainable. Catches disconnected/untrained submodules that a shape check can't. |
+
+Latest run (`tiny.yaml`: 4 layers, hidden 128, 4 heads, vocab 16k):
+
+```
+gpt out shape: (2, 128, 16000)
+OK: GPT returns (batch, seq_len, vocab_size)
+params: 4.9M
+OK: gradients flow to all parameters
+```
+
+> The 4.9M here is the fast **debug** config; the ~30M target model uses a
+> larger `hidden_size`. At this size the token embedding + LM head (vocab ×
+> hidden) account for ~84% of params.
 
 ## Project structure
 
@@ -66,7 +97,7 @@ my-LLM/
 │   ├── prepare_data.py   # download + tokenize TinyStories
 │   └── generate.py       # sample text from a trained checkpoint
 ├── src/
-│   ├── model.py          # transformer: attention, blocks, embeddings
+│   ├── model.py          # transformer: embeddings, attention, FFN, blocks, GPT wrapper
 │   ├── train.py          # training loop
 │   ├── data.py           # data loading / batching
 │   └── tokenizer.py      # tokenizer training
