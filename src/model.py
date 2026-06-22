@@ -67,7 +67,7 @@ class SelfAttention(nn.Module):
     (and so cost) stays at hidden_size regardless of num_heads.
     """
 
-    def __init__(self, hidden_size, num_heads):
+    def __init__(self, hidden_size, num_heads, dropout):
         super().__init__()
         # head_dim must divide evenly so the heads tile hidden_size exactly.
         assert hidden_size % num_heads == 0
@@ -77,6 +77,11 @@ class SelfAttention(nn.Module):
         self.wk = nn.Linear(hidden_size, hidden_size)  # key projection
         self.wv = nn.Linear(hidden_size, hidden_size)  # value projection
         self.proj = nn.Linear(hidden_size, hidden_size)  # output mix across heads
+        # Two dropouts, GPT-2 placement: one on the attention weights (drops
+        # whole token-to-token links), one on the block's output before it
+        # re-enters the residual stream.
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # x: (batch, seq_len, hidden_size). T is the current sequence length.
@@ -112,6 +117,7 @@ class SelfAttention(nn.Module):
 
         # Softmax over the last dim normalizes each query's row to sum to 1.
         attn = F.softmax(scores, dim=-1)  # (batch, num_heads, T, T)
+        attn = self.attn_dropout(attn)    # randomly zero some attention links
         # Weighted sum of values -> each head's context-mixed representation.
         out = attn @ v  # (batch, num_heads, T, head_dim)
         # Recombine heads: transpose back, then merge (num_heads, head_dim) into
@@ -121,6 +127,7 @@ class SelfAttention(nn.Module):
         out = out.contiguous().view(B, T, self.num_heads * self.head_dim)  # (batch, T, hidden_size)
         # Output projection mixes information across heads.
         out = self.proj(out)  # (batch, T, hidden_size)
+        out = self.resid_dropout(out)  # regularize the residual contribution
         return out
 
 class FeedForward(nn.Module):
@@ -140,25 +147,27 @@ class FeedForward(nn.Module):
     matched to the residual stream so blocks stack cleanly.
     """
 
-    def __init__(self, hidden_size, d_ff):
+    def __init__(self, hidden_size, d_ff, dropout):
         super().__init__()
         self.fc1 = nn.Linear(hidden_size, d_ff)  # up-projection:   hidden_size -> d_ff
         self.act = nn.GELU()                     # smooth non-linearity (GPT-style)
         self.fc2 = nn.Linear(d_ff, hidden_size)  # down-projection: d_ff -> hidden_size
+        self.dropout = nn.Dropout(dropout)       # on the block's residual output
 
     def forward(self, x):
         # x: (batch, seq_len, hidden_size). Linear acts on the last dim only, so
         # batch and seq_len pass through untouched -- this is the per-token part.
-        x = self.fc1(x)   # (batch, seq_len, d_ff)
-        x = self.act(x)   # (batch, seq_len, d_ff)
-        x = self.fc2(x)   # (batch, seq_len, hidden_size)
+        x = self.fc1(x)      # (batch, seq_len, d_ff)
+        x = self.act(x)      # (batch, seq_len, d_ff)
+        x = self.fc2(x)      # (batch, seq_len, hidden_size)
+        x = self.dropout(x)  # (batch, seq_len, hidden_size)
         return x
     
 class TransformerBlock(nn.Module):
-    def __init__(self, hidden_size, num_heads, d_ff):
+    def __init__(self, hidden_size, num_heads, d_ff, dropout):
         super().__init__()
-        self.attn = SelfAttention(hidden_size, num_heads)
-        self.ffn = FeedForward(hidden_size, d_ff)
+        self.attn = SelfAttention(hidden_size, num_heads, dropout)
+        self.ffn = FeedForward(hidden_size, d_ff, dropout)
         self.norm_attn = nn.LayerNorm(hidden_size)
         self.norm_ffn = nn.LayerNorm(hidden_size)    
 
@@ -168,10 +177,11 @@ class TransformerBlock(nn.Module):
         return x
     
 class GPT(nn.Module):
-    def __init__(self, vocab_size, hidden_size, seq_len, num_heads, d_ff, num_layers):
+    def __init__(self, vocab_size, hidden_size, seq_len, num_heads, d_ff, num_layers, dropout):
         super().__init__()
         self.embeddings = Embeddings(vocab_size, hidden_size, seq_len)
-        self.blocks = nn.ModuleList([TransformerBlock(hidden_size, num_heads, d_ff) for _ in range(num_layers)])
+        self.drop = nn.Dropout(dropout)  # embedding dropout, applied once at the bottom
+        self.blocks = nn.ModuleList([TransformerBlock(hidden_size, num_heads, d_ff, dropout) for _ in range(num_layers)])
         self.norm_final = nn.LayerNorm(hidden_size)
         self.head = nn.Linear(hidden_size, vocab_size)
         self.vocab_size = vocab_size
@@ -180,9 +190,26 @@ class GPT(nn.Module):
         self.num_heads = num_heads
         self.d_ff = d_ff
         self.num_layers = num_layers
-    
+
+        # GPT-2 style init: weights ~ N(0, 0.02), biases 0, embeddings ~ N(0, 0.02).
+        self.apply(self._init_weights)
+        # Residual scaling: the projections that *write back* into the residual
+        # stream (attn.proj, ffn.fc2) get an extra 1/sqrt(2*num_layers) shrink so
+        # the residual variance doesn't grow with depth (GPT-2 / nanoGPT trick).
+        for name, p in self.named_parameters():
+            if name.endswith("proj.weight") or name.endswith("fc2.weight"):
+                nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * num_layers))
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
     def forward(self, idx):
-        x = self.embeddings(idx)
+        x = self.drop(self.embeddings(idx))
         for block in self.blocks:
             x = block(x)
         x = self.norm_final(x)
@@ -200,7 +227,7 @@ def test_gradient_flow():
     instead of nn.ModuleList, or a sublayer built in __init__ but never used in
     forward. named_parameters() surfaces which param if one fails.
     """
-    m = GPT(vocab_size=50, hidden_size=16, seq_len=8, num_heads=2, d_ff=32, num_layers=2)
+    m = GPT(vocab_size=50, hidden_size=16, seq_len=8, num_heads=2, d_ff=32, num_layers=2, dropout=0.1)
 
     B, T = 4, 8
     idx = torch.randint(0, 50, (B, T))  # fake token IDs
@@ -217,12 +244,14 @@ def test_gradient_flow():
 
     print("OK: gradients flow to all parameters")
 
-cfg = load_config("configs/tiny.yaml")
-gpt = GPT(cfg.vocab_size, cfg.hidden_size, cfg.seq_len,
-          cfg.num_attention_heads, cfg.d_ff, cfg.num_layers)
-
-
 if __name__ == "__main__":
+    # Building the model is a side effect, so it lives here (not at module
+    # scope): importing GPT from train.py must not require a config on disk or
+    # silently construct a throwaway model.
+    cfg = load_config("configs/tiny.yaml")
+    gpt = GPT(cfg.vocab_size, cfg.hidden_size, cfg.seq_len,
+              cfg.num_attention_heads, cfg.d_ff, cfg.num_layers, cfg.dropout_rate)
+
     # --- GPT end-to-end: token IDs in, per-position vocab logits out ----------
     # One pass exercises every component transitively (embeddings, all blocks'
     # attention + FFN + norms, final norm, LM head), so this single shape check

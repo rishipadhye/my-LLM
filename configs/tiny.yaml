@@ -17,8 +17,8 @@ d_ff: 512                   # FFN intermediate width, 4 * hidden_size  (3072 bel
 context_length: 2048        # SUGGEST: TinyStories are short; 256-512 is plenty and
                             #          you only ever train at seq_len below
 seq_len: 128                # training window
-vocab_size: 16000           # SUGGEST: 8k-16k for TinyStories; 50k makes embeddings
-                            #          dominate a ~30M budget
+vocab_size: 8000            # matches the trained tokenizer/tokenizer.json (8k BPE);
+                            #          50k makes embeddings dominate a ~30M budget
 dropout_rate: 0.1           # SUGGEST: 0.0 is common when data >> params
 activation_function: gelu   # SUGGEST: gelu (standard for GPT-style decoders)
 
