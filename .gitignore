@@ -23,6 +23,12 @@ checkpoints/
 tokenizer/
 *.model
 *.vocab
+
+# Kaggle dataset staging payload (hardlinked from data/ and tokenizer/; local-only,
+# uploaded via the Kaggle CLI — only dataset-metadata.json is tracked)
+scripts/kaggle_dataset/train.bin
+scripts/kaggle_dataset/val.bin
+scripts/kaggle_dataset/tokenizer.json
 logs/
 runs/
 wandb/
@@ -31,6 +37,15 @@ outputs/
 # Plots (regenerable from logs) — comment out if you want to commit figures
 # figures/
 # *.png
+
+# Secrets / credentials — never commit these
+kaggle.json
+*.pem
+*.key
+.env
+.env.*
+credentials*.json
+secrets*.json
 
 # Claude Code local (per-machine) settings
 .claude/settings.local.json

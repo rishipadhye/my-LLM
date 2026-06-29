@@ -27,9 +27,8 @@ import random
 import numpy as np
 from data import get_batch
 from tokenizer import load_tokenizer
+from paths import CKPT_DIR, CONFIG_PATH, TOKENIZER_PATH
 import wandb
-
-CKPT_DIR = "checkpoints"
 
 
 def evaluate(model, get_val_batch, eval_iters, device):
@@ -130,14 +129,14 @@ def main():
     torch.manual_seed(1337)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    config = load_config("configs/tiny.yaml")
+    config = load_config(CONFIG_PATH)
 
     wandb.init(project="tinystories-lm", name=config.run_name, config=config.as_dict())
 
     # Sanity check: the tokenizer that produced data/*.bin must match the vocab
     # the model's embedding/LM-head are sized for, or token IDs will index past
     # the embedding table (or silently waste rows).
-    tokenizer = load_tokenizer()
+    tokenizer = load_tokenizer(TOKENIZER_PATH)
     assert tokenizer.get_vocab_size() == config.vocab_size, (
         f"tokenizer vocab {tokenizer.get_vocab_size()} != config.vocab_size {config.vocab_size}"
     )

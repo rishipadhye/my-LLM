@@ -52,7 +52,8 @@ Implemented and smoke-tested so far:
 - [x] Position-wise feed-forward network (GeLU, `d_ff` = 4 × hidden_size)
 - [x] Full transformer block (pre-norm attention + FFN, residual connections)
 - [x] GPT wrapper (stacked blocks + final norm + LM head → logits)
-- [ ] Training loop (AdamW, warmup, gradient clipping)
+- [x] Training loop (AdamW, warmup + cosine schedule, AMP, grad clipping, checkpointing, wandb)
+- [x] Kaggle T4 runner (notebook + tokenized Kaggle Dataset)
 - [ ] Sampling / generation
 - [ ] Ablations, scaling study, and write-up
 
@@ -91,16 +92,20 @@ OK: gradients flow to all parameters
 ```
 my-LLM/
 ├── configs/              # YAML experiment configs (see configs/tiny.yaml)
-├── notebooks/            # exploration / scratch
+├── notebooks/
+│   ├── exploration.ipynb  # scratch
+│   └── kaggle_train.ipynb # Kaggle T4 run: clone → install → link data → train
 ├── scripts/
 │   ├── dataset_stats.py  # inspect raw TinyStories (counts, char stats, samples)
 │   ├── prepare_data.py   # download + tokenize TinyStories
-│   └── generate.py       # sample text from a trained checkpoint
+│   ├── generate.py       # sample text from a trained checkpoint
+│   └── kaggle_dataset/   # dataset-metadata.json for the tokenized Kaggle Dataset
 ├── src/
 │   ├── model.py          # transformer: embeddings, attention, FFN, blocks, GPT wrapper
 │   ├── train.py          # training loop
 │   ├── data.py           # data loading / batching
-│   └── tokenizer.py      # tokenizer training
+│   ├── tokenizer.py      # tokenizer training
+│   └── paths.py          # env-overridable paths (DATA_DIR, TOKENIZER_PATH, CKPT_DIR, CONFIG_PATH)
 ├── requirements.txt
 └── README.md
 ```
@@ -138,11 +143,51 @@ python scripts/prepare_data.py --config configs/tiny.yaml
 # 1b. (optional) Sanity-check the trained tokenizer: vocab size + encode/decode round-trip
 python -m src.tokenizer
 
-# 2. Train
-python -m src.train --config configs/tiny.yaml
+# 2. Train (defaults to configs/tiny.yaml; pick another with CONFIG_PATH=...)
+python src/train.py
 
 # 3. Generate
 python scripts/generate.py --checkpoint checkpoints/... --prompt "Once upon a time"
+```
+
+## Run on Kaggle
+
+Training targets a free Kaggle T4. The tokenized corpus and tokenizer ship as a
+private **Kaggle Dataset** (the `.bin` files are too large for git), and
+`notebooks/kaggle_train.ipynb` wires it all together: clone the repo, install
+deps, point the code at the dataset, train.
+
+**One-time: publish the tokenized data as a private Dataset** (from the repo root,
+needs the [Kaggle CLI](https://github.com/Kaggle/kaggle-api) authenticated via
+`kaggle auth login`):
+
+```bash
+# stage the payload next to its metadata (hardlinks -> no ~900 MB copy)
+ln -f data/train.bin data/val.bin tokenizer/tokenizer.json scripts/kaggle_dataset/
+kaggle datasets create  -p scripts/kaggle_dataset                  # first upload
+kaggle datasets version -p scripts/kaggle_dataset -m "refresh"     # later updates
+```
+
+**Then on Kaggle:** open `notebooks/kaggle_train.ipynb`, set Accelerator → GPU T4,
+add the dataset as input, optionally add a `WANDB_API_KEY` secret, and Run All.
+
+### Path overrides
+
+`src/paths.py` resolves every path the run touches from environment variables,
+falling back to the local layout — so the same code runs unchanged on Kaggle
+(read-only data under `/kaggle/input`) with no edits or symlinks:
+
+| Env var | Default | What |
+| --- | --- | --- |
+| `DATA_DIR` | `data` | dir holding `train.bin` / `val.bin` |
+| `TOKENIZER_PATH` | `tokenizer/tokenizer.json` | tokenizer JSON |
+| `CKPT_DIR` | `checkpoints` | checkpoint output dir |
+| `CONFIG_PATH` | `configs/tiny.yaml` | YAML config to load |
+
+So a one-off ablation needs no code change:
+
+```bash
+CONFIG_PATH=configs/no_warmup.yaml python src/train.py
 ```
 
 ## Experiments

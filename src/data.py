@@ -1,8 +1,9 @@
 import numpy as np
 import torch
+from paths import data_path
 
 def get_batch(split, seq_len, batch_size, device="cpu"):
-    data = np.memmap(f"data/{split}.bin", dtype=np.uint16, mode="r")
+    data = np.memmap(data_path(split), dtype=np.uint16, mode="r")
     HIGH = len(data) - seq_len
     ix = torch.randint(HIGH, (batch_size,))
     x = torch.stack([torch.from_numpy(data[i : i+seq_len].astype(np.int64)) for i in ix])
