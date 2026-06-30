@@ -54,7 +54,8 @@ Implemented and smoke-tested so far:
 - [x] GPT wrapper (stacked blocks + final norm + LM head → logits)
 - [x] Training loop (AdamW, warmup + cosine schedule, AMP, grad clipping, checkpointing, wandb)
 - [x] Kaggle T4 runner (notebook + tokenized Kaggle Dataset)
-- [ ] Sampling / generation
+- [x] Sampling / generation (`scripts/generate.py`, stops at end-of-text)
+- [x] Baseline trained: 30M model, 80k steps, **val_loss 1.43** (see [Results](#results))
 - [ ] Ablations, scaling study, and write-up
 
 ## Tests
@@ -200,7 +201,32 @@ CONFIG_PATH=configs/no_warmup.yaml python src/train.py
 
 ## Results
 
-<!-- Plots and findings go here once you have training runs. -->
+### Baseline — 30M model, 80k steps
+
+The ~30M model (`configs/small.yaml`: hidden 512, 8 layers, 8 heads, vocab 8k,
+seq 256 → **33.6M params**) trained on a single Kaggle T4 for the full 80k-step
+warmup + cosine schedule (~4.5 h at ~42k tokens/sec):
+
+![Training run: val_loss, train_loss, tokens_per_sec, step, lr, grad_norm over 80k steps](assets/baseline_80k_charts.png)
+
+| Metric | Value |
+| --- | --- |
+| **val_loss** | **1.43** (train 1.46) |
+| Throughput | ~42k tokens/sec (fp16 AMP, batch 32) |
+| Params | 33.6M |
+| Schedule | linear warmup (2k) → cosine decay to 10% of peak |
+
+Sample (prompt `"Once upon a time"`, temperature 0.8):
+
+> Once upon a time, there was a little girl named Lily. She loved to play in the
+> garden with her toys. One day, she found a shiny rock and she wanted to keep it
+> safe. She put it in her pocket and went to play with her toys. … She remembered
+> the shiny rock in her pocket and thought it might make a magic wand.
+
+The model produces fluent, coherent TinyStories-style narratives with consistent
+characters and a clear story arc. Residual small-model artifacts (occasional
+repetition or mild logic drift) are expected at this scale and are exactly what
+the planned scaling study is meant to probe.
 
 ## Acknowledgements
 
