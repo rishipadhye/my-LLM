@@ -65,7 +65,10 @@ def main():
     # ---- load the checkpoint file ----
     # map_location=device moves the saved tensors onto whatever hardware we have
     # right now, so a GPU-trained checkpoint still loads on a CPU-only machine.
-    ckpt = torch.load(ckpt_path, map_location=device)
+    # weights_only=False because our checkpoints also pickle numpy RNG state;
+    # PyTorch 2.6+ defaults this to True and would refuse to unpickle it. Safe
+    # here since we produced these files ourselves.
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
 
     # Rebuild the architecture from the config SAVED INSIDE the checkpoint, not
     # from configs/small.yaml on disk. This guarantees the model's shape matches

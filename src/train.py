@@ -121,7 +121,9 @@ def load_checkpoint(path, model, optimizer, scaler, device):
     and re-attach to the original wandb run. wandb_run_id is None for older
     checkpoints saved before it was tracked.
     """
-    ckpt = torch.load(path, map_location=device)
+    # weights_only=False: the checkpoint pickles numpy RNG state, which PyTorch
+    # 2.6+ blocks under the new weights_only=True default. Safe — we wrote it.
+    ckpt = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model"])
     optimizer.load_state_dict(ckpt["optimizer"])
     scaler.load_state_dict(ckpt["scaler"])
