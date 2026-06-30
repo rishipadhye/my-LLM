@@ -64,6 +64,10 @@ def generate(model, tokenizer, device, prompt="Once upon a time", max_new_tokens
     """
     was_training = model.training
     model.eval()
+    # Stop token: the model was trained with stories separated by <|endoftext|>,
+    # so it emits this id to mark "story over". token_to_id returns None if the
+    # tokenizer lacks it, in which case we just run to max_new_tokens.
+    eot_id = tokenizer.token_to_id("<|endoftext|>")
     ids = tokenizer.encode(prompt).ids
     idx = torch.tensor([ids], dtype=torch.long, device=device)
     for _ in range(max_new_tokens):
@@ -75,6 +79,10 @@ def generate(model, tokenizer, device, prompt="Once upon a time", max_new_tokens
             logits[logits < v[:, [-1]]] = float("-inf")
         probs = F.softmax(logits, dim=-1)
         next_id = torch.multinomial(probs, num_samples=1)
+        # End the story cleanly: if the model signals end-of-text, stop before
+        # appending it so the sample doesn't run on into a fresh story.
+        if eot_id is not None and next_id.item() == eot_id:
+            break
         idx = torch.cat([idx, next_id], dim=1)
     if was_training:
         model.train()
