@@ -1,0 +1,52 @@
+# =============================================================================
+# small.yaml — ~30M-parameter TinyStories LM ("small" scale point).
+#
+# Values chosen interactively. Loaded via src/config.py -> load_config(...).
+# Param budget at this config: ~33.6M (see breakdown at the bottom).
+# =============================================================================
+
+run_name: small
+
+# --- model ---------------------------------------------------------------
+hidden_size: 512            # model width / embedding dim; per-layer cost ~12 * hidden^2
+num_layers: 8               # transformer blocks (8 -> ~33.6M; 7 -> ~30.4M)
+num_attention_heads: 8      # head_dim = 512 / 8 = 64
+d_ff: 2048                  # FFN intermediate width (4 * hidden_size)
+context_length: 256         # max supported positions (kept == seq_len)
+seq_len: 256                # training window; also sizes the position-embedding table
+vocab_size: 8000            # matches the 8k BPE tokenizer.json; counts twice (emb + head)
+dropout_rate: 0.1           # GPT-2-style dropout
+activation_function: gelu   # GELU (matches FeedForward in src/model.py)
+
+# --- optimization --------------------------------------------------------
+optimizer: AdamW
+learning_rate: 3.0e-4
+weight_decay: 0.1
+gradient_clip_norm: 1.0
+
+# --- schedule ------------------------------------------------------------
+warmup_steps: 2000          # linear warmup (~10% of max_steps)
+max_steps: 20000            # total training steps
+max_lr: 3.0e-4              # peak LR for the cosine schedule (== learning_rate)
+min_lr: 3.0e-5             # cosine floor (10% of peak)
+
+# --- logging / eval / checkpoint ----------------------------------------
+log_interval: 10            # log train loss / lr / grad_norm every N steps
+eval_interval: 500          # run validation every N steps
+eval_iters: 100             # val batches averaged per eval
+sample_interval: 1000       # generate + log a text sample every N steps
+ckpt_interval: 1000         # save a checkpoint every N steps
+
+# --- data / runtime ------------------------------------------------------
+batch_size: 32
+
+# --- parameter budget (hidden=512, layers=8, heads=8, d_ff=2048, vocab=8000, seq=256)
+#   token embedding   8000*512            =  4,096,000
+#   position embedding 256*512            =    131,072
+#   per layer  (attn 1,050,624
+#             + ffn  2,099,712
+#             + 2 LN     2,048) = 3,152,384  x8 = 25,219,072
+#   final LayerNorm                       =      1,024
+#   LM head    512*8000 + 8000            =  4,104,000
+#   --------------------------------------------------------
+#   total                                 = 33,551,168  (~33.6M)

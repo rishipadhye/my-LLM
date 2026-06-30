@@ -29,6 +29,7 @@ from data import get_batch
 from tokenizer import load_tokenizer
 from paths import CKPT_DIR, CONFIG_PATH, TOKENIZER_PATH
 import wandb
+import time
 
 
 def evaluate(model, get_val_batch, eval_iters, device):
@@ -80,10 +81,14 @@ def generate(model, tokenizer, device, prompt="Once upon a time", max_new_tokens
     return tokenizer.decode(idx[0].tolist())
 
 
-def save_checkpoint(path, model, optimizer, scaler, step, config):
+def save_checkpoint(path, model, optimizer, scaler, step, config, wandb_run_id=None):
     """Save everything needed to resume bit-for-bit: weights, optimizer +
     scaler state, the step counter, the config, and all RNG states so the same
-    data batches / dropout masks continue after a resume."""
+    data batches / dropout masks continue after a resume.
+
+    wandb_run_id is stashed too so a resumed run re-attaches to the same wandb
+    run and its loss/lr curves continue in one chart instead of a fresh one.
+    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     torch.save({
         "model": model.state_dict(),
@@ -91,6 +96,7 @@ def save_checkpoint(path, model, optimizer, scaler, step, config):
         "scaler": scaler.state_dict(),
         "step": step,
         "config": config.as_dict(),
+        "wandb_run_id": wandb_run_id,
         "rng": {
             "torch": torch.get_rng_state(),
             "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
@@ -109,7 +115,12 @@ def find_latest_checkpoint(ckpt_dir=CKPT_DIR):
 
 
 def load_checkpoint(path, model, optimizer, scaler, device):
-    """Restore model/optimizer/scaler/RNG in place and return the saved step."""
+    """Restore model/optimizer/scaler/RNG in place.
+
+    Returns (step, wandb_run_id) so the caller can both resume the step counter
+    and re-attach to the original wandb run. wandb_run_id is None for older
+    checkpoints saved before it was tracked.
+    """
     ckpt = torch.load(path, map_location=device)
     model.load_state_dict(ckpt["model"])
     optimizer.load_state_dict(ckpt["optimizer"])
@@ -121,7 +132,7 @@ def load_checkpoint(path, model, optimizer, scaler, device):
             torch.cuda.set_rng_state_all(rng["cuda"])
         np.random.set_state(rng["numpy"])
         random.setstate(rng["python"])
-    return ckpt["step"]
+    return ckpt["step"], ckpt.get("wandb_run_id")
 
 
 def main():
@@ -130,8 +141,6 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     config = load_config(CONFIG_PATH)
-
-    wandb.init(project="tinystories-lm", name=config.run_name, config=config.as_dict())
 
     # Sanity check: the tokenizer that produced data/*.bin must match the vocab
     # the model's embedding/LM-head are sized for, or token IDs will index past
@@ -167,16 +176,30 @@ def main():
         return config.min_lr + coeff * (config.max_lr - config.min_lr)
 
     # ---- resume from latest checkpoint if one exists ----
+    # Done before wandb.init so we know whether to re-attach to the saved run.
     start_step = 0
+    resume_run_id = None
     latest = find_latest_checkpoint(CKPT_DIR)
     if latest is not None:
-        start_step = load_checkpoint(latest, model, optimizer, scaler, device) + 1
+        last_step, resume_run_id = load_checkpoint(latest, model, optimizer, scaler, device)
+        start_step = last_step + 1
         print(f"resuming from {latest} at step {start_step}")
+
+    # ---- wandb: continue the saved run on resume, else start a fresh one ----
+    # resume="allow" re-attaches when id matches an existing run and creates it
+    # otherwise, so this is safe whether or not the run already exists upstream.
+    if resume_run_id is not None:
+        wandb.init(project="tinystories-lm", id=resume_run_id, resume="allow",
+                   config=config.as_dict())
+        print(f"resuming wandb run {resume_run_id}")
+    else:
+        wandb.init(project="tinystories-lm", name=config.run_name, config=config.as_dict())
 
     sample_interval = config.get("sample_interval", config.eval_interval)
 
     # ---- training loop ----
     model.train()
+    t = time.time()
     for step in range(start_step, config.max_steps):
         # set LR manually (simpler than a scheduler object while learning)
         lr = get_lr(step)
@@ -202,8 +225,11 @@ def main():
 
         # ---- periodic ----
         if step % config.log_interval == 0:
+            dt = time.time() - t
+            tokens_per_sec = config.log_interval * config.batch_size * config.seq_len / dt
             wandb.log({"train_loss": loss.item(), "lr": lr,
-                       "grad_norm": grad_norm.item(), "step": step})
+                       "grad_norm": grad_norm.item(), "step": step, "tokens_per_sec": tokens_per_sec})
+            t = time.time()
         if step % config.eval_interval == 0:
             val_loss = evaluate(model, get_val_batch, config.eval_iters, device)
             wandb.log({"val_loss": val_loss, "step": step})
@@ -212,11 +238,11 @@ def main():
             wandb.log({"sample": wandb.Html(f"<pre>{sample}</pre>"), "step": step})
         if step > 0 and step % config.ckpt_interval == 0:
             save_checkpoint(os.path.join(CKPT_DIR, f"ckpt_{step}.pt"),
-                            model, optimizer, scaler, step, config)
+                            model, optimizer, scaler, step, config, wandb.run.id)
 
     # ---- final checkpoint (loop may not land on a ckpt_interval boundary) ----
     save_checkpoint(os.path.join(CKPT_DIR, f"ckpt_{config.max_steps}.pt"),
-                    model, optimizer, scaler, config.max_steps, config)
+                    model, optimizer, scaler, config.max_steps, config, wandb.run.id)
 
 
 if __name__ == "__main__":
