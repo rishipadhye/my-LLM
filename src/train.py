@@ -160,7 +160,7 @@ def main():
         f"tokenizer vocab {tokenizer.get_vocab_size()} != config.vocab_size {config.vocab_size}"
     )
 
-    model = GPT(config.vocab_size, config.hidden_size, config.seq_len, config.num_attention_heads, config.d_ff, config.num_layers, config.dropout_rate)
+    model = GPT(config.vocab_size, config.hidden_size, config.seq_len, config.num_attention_heads, config.d_ff, config.num_layers, config.dropout_rate, config.norm_type)
     model = model.to(device)
 
     def get_train_batch():
@@ -203,7 +203,13 @@ def main():
                    config=config.as_dict())
         print(f"resuming wandb run {resume_run_id}")
     else:
-        wandb.init(project="tinystories-lm", name=config.run_name, config=config.as_dict())
+        # group/tags come from the config (None when absent, e.g. tiny/small),
+        # so ablation arms sharing a `wandb_group` auto-overlay on one W&B chart
+        # and `wandb_tags` make them filterable once many runs pile up.
+        wandb.init(project="tinystories-lm", name=config.run_name,
+                   group=config.get("wandb_group", None),
+                   tags=config.get("wandb_tags", None),
+                   config=config.as_dict())
 
     sample_interval = config.get("sample_interval", config.eval_interval)
 

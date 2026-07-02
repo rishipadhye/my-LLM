@@ -163,26 +163,78 @@ class FeedForward(nn.Module):
         x = self.dropout(x)  # (batch, seq_len, hidden_size)
         return x
     
+class RMSNorm(nn.Module):
+    """Root-mean-square normalization: a lighter alternative to LayerNorm.
+
+    LayerNorm does two things to each token's vector: re-centers it to mean 0,
+    then rescales it to unit variance -- with a learned scale *and* a learned
+    shift. RMSNorm keeps only the rescaling: it divides each vector by its
+    root-mean-square magnitude and applies a single learned per-feature scale.
+    Dropping the mean-subtraction (and the shift parameter) makes it cheaper,
+    and in practice just as effective -- it's what Llama and most modern LMs use.
+
+    Selectable against nn.LayerNorm via the model's `norm_type` config, which is
+    exactly the RMSNorm-vs-LayerNorm ablation this project runs.
+    """
+
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps  # guards the division against a zero-magnitude vector
+        # One learned scale per feature, initialized to 1 so the layer starts as
+        # a pure normalizer (and note: no shift term, unlike LayerNorm).
+        self.scale = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        # x: (batch, seq_len, dim). RMS is computed per token over the last
+        # (feature) dim; keepdim=True keeps the (..., 1) shape so it broadcasts
+        # cleanly back over x. eps sits *inside* the sqrt so the denominator can
+        # never be exactly 0.
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        x = (x / rms) * self.scale  # normalize, then apply the learned scale
+        return x
+
+
+
 class TransformerBlock(nn.Module):
-    def __init__(self, hidden_size, num_heads, d_ff, dropout):
+    """One pre-norm transformer block: attention sublayer + FFN sublayer.
+
+    Pre-norm means each sublayer normalizes its input *before* the attention/FFN
+    and adds the result back onto the residual stream (`x + sublayer(norm(x))`).
+    Keeping the residual path un-normalized is what lets many blocks stack while
+    gradients still flow cleanly to the bottom.
+    """
+
+    def __init__(self, hidden_size, num_heads, d_ff, dropout, norm_type="layernorm"):
         super().__init__()
         self.attn = SelfAttention(hidden_size, num_heads, dropout)
         self.ffn = FeedForward(hidden_size, d_ff, dropout)
-        self.norm_attn = nn.LayerNorm(hidden_size)
-        self.norm_ffn = nn.LayerNorm(hidden_size)    
+        # Norm type is config-selectable so the RMSNorm-vs-LayerNorm ablation
+        # needs no model-code change -- just a different `norm_type` in the YAML.
+        if norm_type == "layernorm":
+            self.norm_attn = nn.LayerNorm(hidden_size)
+            self.norm_ffn = nn.LayerNorm(hidden_size)
+        else:  # "rmsnorm"
+            self.norm_attn = RMSNorm(hidden_size)
+            self.norm_ffn = RMSNorm(hidden_size)
 
     def forward(self, x):
+        # Pre-norm + residual: normalize, run the sublayer, add back onto x.
         x = x + self.attn(self.norm_attn(x))
         x = x + self.ffn(self.norm_ffn(x))
         return x
     
 class GPT(nn.Module):
-    def __init__(self, vocab_size, hidden_size, seq_len, num_heads, d_ff, num_layers, dropout):
+    def __init__(self, vocab_size, hidden_size, seq_len, num_heads, d_ff, num_layers, dropout, norm_type="layernorm"):
         super().__init__()
         self.embeddings = Embeddings(vocab_size, hidden_size, seq_len)
         self.drop = nn.Dropout(dropout)  # embedding dropout, applied once at the bottom
-        self.blocks = nn.ModuleList([TransformerBlock(hidden_size, num_heads, d_ff, dropout) for _ in range(num_layers)])
-        self.norm_final = nn.LayerNorm(hidden_size)
+        self.blocks = nn.ModuleList([TransformerBlock(hidden_size, num_heads, d_ff, dropout, norm_type) for _ in range(num_layers)])
+        # Final norm before the LM head; matches the blocks' norm_type so the
+        # whole model uses one norm family per run (see TransformerBlock).
+        if norm_type == "layernorm":
+            self.norm_final = nn.LayerNorm(hidden_size)
+        else:  # "rmsnorm"
+            self.norm_final = RMSNorm(hidden_size)
         self.head = nn.Linear(hidden_size, vocab_size)
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
@@ -227,7 +279,7 @@ def test_gradient_flow():
     instead of nn.ModuleList, or a sublayer built in __init__ but never used in
     forward. named_parameters() surfaces which param if one fails.
     """
-    m = GPT(vocab_size=50, hidden_size=16, seq_len=8, num_heads=2, d_ff=32, num_layers=2, dropout=0.1)
+    m = GPT(vocab_size=50, hidden_size=16, seq_len=8, num_heads=2, d_ff=32, num_layers=2, dropout=0.1, norm_type="layernorm")
 
     B, T = 4, 8
     idx = torch.randint(0, 50, (B, T))  # fake token IDs
@@ -250,7 +302,7 @@ if __name__ == "__main__":
     # silently construct a throwaway model.
     cfg = load_config("configs/tiny.yaml")
     gpt = GPT(cfg.vocab_size, cfg.hidden_size, cfg.seq_len,
-              cfg.num_attention_heads, cfg.d_ff, cfg.num_layers, cfg.dropout_rate)
+              cfg.num_attention_heads, cfg.d_ff, cfg.num_layers, cfg.dropout_rate, cfg.norm_type)
 
     # --- GPT end-to-end: token IDs in, per-position vocab logits out ----------
     # One pass exercises every component transitively (embeddings, all blocks'
@@ -270,3 +322,20 @@ if __name__ == "__main__":
 
     # --- Gradient flow: every param must receive a non-zero grad after backward.
     test_gradient_flow()
+
+    idx = torch.randn(2,4,16)
+    rms = RMSNorm(16)
+    logits = rms(idx)
+    print("rms out shape:", tuple(logits.shape))
+    assert logits.shape == (2, 4, 16), logits.shape
+    print(logits.pow(2).mean(dim=-1))
+    print("rms mean:", logits.mean(dim=-1))
+    print("OK: RMS returns (batch, seq_len, vocab_size)")
+    layer_norm = nn.LayerNorm(16)
+    logits = layer_norm(idx)
+    print("layer_norm out shape:", tuple(logits.shape))
+    assert logits.shape == (2, 4, 16), logits.shape
+    print(logits.pow(2).mean(dim=-1))
+    print("layernorm mean:", logits.mean(dim=-1))
+    print("OK: Layer Norm returns (batch, seq_len, vocab_size)")
+

@@ -1,0 +1,45 @@
+# =============================================================================
+# ablation_norm_rmsnorm.yaml — Ablation 7.1 (norm type), RMSNorm arm.
+#
+# Identical to ablation_norm_layernorm.yaml in EVERY field except norm_type,
+# run_name, and wandb_tags. Shorter 22k-step budget (vs small.yaml's 80k) so
+# ablation runs are cheap; both arms share this exact budget for a fair compare.
+# =============================================================================
+
+run_name: norm_rmsnorm
+wandb_group: norm_ablation      # groups both arms onto one W&B comparison
+wandb_tags: [norm_ablation, rmsnorm]
+
+# --- model ---------------------------------------------------------------
+hidden_size: 512
+num_layers: 8
+num_attention_heads: 8
+d_ff: 2048
+context_length: 256
+seq_len: 256
+vocab_size: 8000
+dropout_rate: 0.1
+activation_function: gelu
+norm_type: rmsnorm              # <-- the only knob that differs between arms
+
+# --- optimization --------------------------------------------------------
+optimizer: AdamW
+learning_rate: 3.0e-4
+weight_decay: 0.1
+gradient_clip_norm: 1.0
+
+# --- schedule ------------------------------------------------------------
+warmup_steps: 2000              # held equal to the layernorm arm (not scaled)
+max_steps: 22000                # ablation budget (~22k; small.yaml baseline is 80k)
+max_lr: 3.0e-4
+min_lr: 3.0e-5
+
+# --- logging / eval / checkpoint ----------------------------------------
+log_interval: 10
+eval_interval: 1000             # 22 evals over 22k steps
+eval_iters: 100
+sample_interval: 2000           # 11 samples over the run
+ckpt_interval: 5000
+
+# --- data / runtime ------------------------------------------------------
+batch_size: 32

@@ -56,7 +56,8 @@ Implemented and smoke-tested so far:
 - [x] Kaggle T4 runner (notebook + tokenized Kaggle Dataset)
 - [x] Sampling / generation (`scripts/generate.py`, stops at end-of-text)
 - [x] Baseline trained: 30M model, 80k steps, **val_loss 1.43** (see [Results](#results))
-- [ ] Ablations, scaling study, and write-up
+- [x] Config-selectable norm type + hand-written RMSNorm (RMSNorm-vs-LayerNorm ablation implemented & pipeline-verified; see [Ablations](#ablations))
+- [ ] Ablation training runs, scaling study, and write-up
 
 ## Tests
 
@@ -195,7 +196,7 @@ CONFIG_PATH=configs/no_warmup.yaml python src/train.py
 
 | Experiment            | Variable            | Configs                     | Status |
 | --------------------- | ------------------- | --------------------------- | ------ |
-| Norm ablation         | RMSNorm vs LayerNorm| `configs/...`               | TODO   |
+| Norm ablation         | RMSNorm vs LayerNorm| `ablation_norm_layernorm.yaml`, `ablation_norm_rmsnorm.yaml` | Implemented + smoke-tested; 22k runs pending |
 | Warmup ablation       | warmup_steps        | `configs/...`               | TODO   |
 | Scaling               | model size          | `configs/...`               | TODO   |
 
@@ -227,6 +228,46 @@ The model produces fluent, coherent TinyStories-style narratives with consistent
 characters and a clear story arc. Residual small-model artifacts (occasional
 repetition or mild logic drift) are expected at this scale and are exactly what
 the planned scaling study is meant to probe.
+
+## Ablations
+
+### 1. RMSNorm vs LayerNorm
+
+**Status:** implemented and pipeline-verified; the two training runs are queued.
+
+RMSNorm is hand-written (`src/model.py`, ~6 lines: divide each token vector by
+its root-mean-square, then apply one learned scale — no mean-subtraction and no
+shift, unlike LayerNorm). The norm type is selectable per run via `norm_type` in
+the config, so the two arms share identical code and differ in exactly one field:
+
+- `configs/ablation_norm_layernorm.yaml` — `norm_type: layernorm`
+- `configs/ablation_norm_rmsnorm.yaml` — `norm_type: rmsnorm`
+
+Both run at a reduced **22k-step** budget (vs the 80k baseline) to keep ablations
+cheap, and share `wandb_group: norm_ablation` so their curves auto-overlay in
+Weights & Biases.
+
+**Implementation sanity checks** (done before spending any GPU time — a random
+`(2, 4, 16)` input through each norm):
+
+| Property | LayerNorm | RMSNorm |
+| --- | --- | --- |
+| Per-token mean of output | ≈ 0 (it re-centers) | non-zero (never centers) |
+| Per-token RMS of output | ≈ 1 | ≈ 1 |
+
+Both control magnitude identically (RMS ≈ 1); only LayerNorm also forces the mean
+to 0. That single difference — LayerNorm's extra centering + shift parameter — is
+the whole substance of the ablation.
+
+**Parameter cost.** On the `tiny.yaml` debug build (hidden 128, 4 layers → 9
+norms), LayerNorm gives 2.866M params vs RMSNorm's 2.865M. The ~1.15k gap is
+exactly RMSNorm dropping LayerNorm's per-feature shift vector (9 norms × 128).
+RMSNorm is strictly lighter.
+
+**Pipeline smoke test.** A 200-step CPU run of the LayerNorm arm confirmed the
+full path end to end: config → model builds with `norm_type` → training loop
+(`train_loss` 9.13 → 3.94) → eval (`val_loss` 8.98 → 4.13) → sample + checkpoint
+→ correct W&B grouping. So the real 22k runs should launch clean on the T4.
 
 ## Acknowledgements
 

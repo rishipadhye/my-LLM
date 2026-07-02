@@ -17,6 +17,7 @@ seq_len: 256                # training window; also sizes the position-embedding
 vocab_size: 8000            # matches the 8k BPE tokenizer.json; counts twice (emb + head)
 dropout_rate: 0.1           # GPT-2-style dropout
 activation_function: gelu   # GELU (matches FeedForward in src/model.py)
+norm_type: layernorm
 
 # --- optimization --------------------------------------------------------
 optimizer: AdamW

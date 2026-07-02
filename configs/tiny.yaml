@@ -21,6 +21,7 @@ vocab_size: 8000            # matches the trained tokenizer/tokenizer.json (8k B
                             #          50k makes embeddings dominate a ~30M budget
 dropout_rate: 0.1           # SUGGEST: 0.0 is common when data >> params
 activation_function: gelu   # SUGGEST: gelu (standard for GPT-style decoders)
+norm_type: "layernorm"
 
 # --- optimization --------------------------------------------------------
 optimizer: AdamW
