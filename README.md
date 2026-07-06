@@ -56,8 +56,8 @@ Implemented and smoke-tested so far:
 - [x] Kaggle T4 runner (notebook + tokenized Kaggle Dataset)
 - [x] Sampling / generation (`scripts/generate.py`, stops at end-of-text)
 - [x] Baseline trained: 30M model, 80k steps, **val_loss 1.43** (see [Results](#results))
-- [x] Config-selectable norm type + hand-written RMSNorm (RMSNorm-vs-LayerNorm ablation implemented & pipeline-verified; see [Ablations](#ablations))
-- [ ] Ablation training runs, scaling study, and write-up
+- [x] Config-selectable norm type + hand-written RMSNorm; **RMSNorm-vs-LayerNorm ablation trained** — quality tie, LayerNorm faster (see [Ablations](#ablations))
+- [ ] Warmup ablation, scaling study, and write-up
 
 ## Tests
 
@@ -196,7 +196,7 @@ CONFIG_PATH=configs/no_warmup.yaml python src/train.py
 
 | Experiment            | Variable            | Configs                     | Status |
 | --------------------- | ------------------- | --------------------------- | ------ |
-| Norm ablation         | RMSNorm vs LayerNorm| `ablation_norm_layernorm.yaml`, `ablation_norm_rmsnorm.yaml` | Implemented + smoke-tested; 22k runs pending |
+| Norm ablation         | RMSNorm vs LayerNorm| `ablation_norm_layernorm.yaml`, `ablation_norm_rmsnorm.yaml` | Done — loss tie; LayerNorm ~33% faster (unfused RMSNorm) |
 | Warmup ablation       | warmup_steps        | `configs/...`               | TODO   |
 | Scaling               | model size          | `configs/...`               | TODO   |
 
@@ -233,7 +233,7 @@ the planned scaling study is meant to probe.
 
 ### 1. RMSNorm vs LayerNorm
 
-**Status:** implemented and pipeline-verified; the two training runs are queued.
+**Status:** complete — both 22k-step arms trained on a Kaggle T4.
 
 RMSNorm is hand-written (`src/model.py`, ~6 lines: divide each token vector by
 its root-mean-square, then apply one learned scale — no mean-subtraction and no
@@ -268,6 +268,29 @@ RMSNorm is strictly lighter.
 full path end to end: config → model builds with `norm_type` → training loop
 (`train_loss` 9.13 → 3.94) → eval (`val_loss` 8.98 → 4.13) → sample + checkpoint
 → correct W&B grouping. So the real 22k runs should launch clean on the T4.
+
+**Results (22k steps, Kaggle T4).** Both arms started from the identical seed, so
+their `lr` and early curves overlay exactly — the comparison is clean.
+
+![Norm ablation: val_loss, train_loss, tokens_per_sec, step, lr, grad_norm — LayerNorm vs RMSNorm over 22k steps](assets/norm_ablation_charts.png)
+
+| Metric | LayerNorm | RMSNorm |
+| --- | --- | --- |
+| **val_loss** (final) | **1.601** | 1.603 |
+| train_loss (final) | 1.796 | 1.800 |
+| Throughput | ~43k tok/s | ~32k tok/s |
+| grad_norm (final) | 0.71 | 0.70 |
+
+**Takeaway — a quality tie, a speed win for LayerNorm.** The two arms are
+statistically indistinguishable on loss (Δval_loss ≈ 0.002, within run-to-run
+noise): at 30M scale, dropping LayerNorm's mean-centering costs nothing in
+quality — RMSNorm gives up centering essentially for free. The one real
+difference is throughput: LayerNorm ran ~33% faster, because PyTorch's
+`nn.LayerNorm` is a single fused CUDA kernel while the hand-written RMSNorm here
+is several unfused tensor ops. That gap is an *implementation* artifact, not a
+property of RMSNorm — a fused RMSNorm (as used in Llama) would match or beat
+LayerNorm. Net: with this unfused RMSNorm, LayerNorm is the better default at
+this scale, so subsequent ablations fork from the LayerNorm arm.
 
 ## Acknowledgements
 
