@@ -1,0 +1,45 @@
+# =============================================================================
+# ablation_warmup_50.yaml — Ablation 7.2 (warmup length), 50-step arm.
+#
+# Forked from the Ablation 7.1 winner (LayerNorm). Identical to the other two
+# warmup arms (500, 2000) in EVERY field except warmup_steps, run_name, and
+# wandb_tags. Same 22k-step budget as the norm ablation so results compare.
+# =============================================================================
+
+run_name: warmup_50
+wandb_group: warmup_ablation    # groups all three arms onto one W&B comparison
+wandb_tags: [warmup_ablation, warmup50]
+
+# --- model ---------------------------------------------------------------
+hidden_size: 512
+num_layers: 8
+num_attention_heads: 8
+d_ff: 2048
+context_length: 256
+seq_len: 256
+vocab_size: 8000
+dropout_rate: 0.1
+activation_function: gelu
+norm_type: layernorm            # fixed at the Ablation 7.1 winner
+
+# --- optimization --------------------------------------------------------
+optimizer: AdamW
+learning_rate: 3.0e-4
+weight_decay: 0.1
+gradient_clip_norm: 1.0
+
+# --- schedule ------------------------------------------------------------
+warmup_steps: 50                # <-- the only knob that differs between arms
+max_steps: 22000                # ablation budget (matches the norm ablation)
+max_lr: 3.0e-4
+min_lr: 3.0e-5
+
+# --- logging / eval / checkpoint ----------------------------------------
+log_interval: 10
+eval_interval: 1000             # 22 evals over 22k steps
+eval_iters: 100
+sample_interval: 2000           # 11 samples over the run
+ckpt_interval: 5000
+
+# --- data / runtime ------------------------------------------------------
+batch_size: 32
