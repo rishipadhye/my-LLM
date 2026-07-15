@@ -58,6 +58,7 @@ Implemented and smoke-tested so far:
 - [x] Baseline trained: 30M model, 80k steps, **val_loss 1.43** (see [Results](#results))
 - [x] Config-selectable norm type + hand-written RMSNorm; **RMSNorm-vs-LayerNorm ablation trained** — quality tie, LayerNorm faster (see [Ablations](#ablations))
 - [x] Warmup-length ablation (50/500/2000) + high-LR/no-clip stress variant trained — negligible effect at this scale; AdamW makes warmup redundant (see [Ablations](#ablations))
+- [x] LR sweep (3e-4 / 1e-3 / 3e-3) — **peak LR is the real lever**: 1e-3 cuts val_loss 0.042 vs baseline, then plateaus (see [Ablations](#ablations))
 - [ ] Scaling study, and write-up
 
 ## Tests
@@ -378,11 +379,52 @@ Two footnotes worth the reader's attention:
 
 - **The 10× LR *helped*.** Both stress arms (~1.55) beat every baseline-LR arm
   (~1.59). The real lever at this scale isn't warmup, it's **peak learning rate** —
-  the conservative 3e-4 baseline was leaving quality on the table. A dedicated LR
-  sweep is the natural next experiment.
+  the conservative 3e-4 baseline was leaving quality on the table. A dedicated
+  [LR sweep](#4-learning-rate-sweep) is the natural next experiment — done below.
 - LR and clipping were changed together, so this cleanly shows *warmup* is robust
   under aggressive optimization; isolating clipping's individual effect would need
   extra arms.
+
+### 4. Learning-rate sweep
+
+**Status:** complete — three 22k-step arms trained on a Kaggle T4.
+
+The stress ablation hinted that **peak learning rate**, not warmup, is the lever
+that actually moves quality. This sweep confirms it directly: it varies `max_lr`
+(with `min_lr` tracking at 10% and `learning_rate` mirroring) across a 10× range,
+holding gradient clipping **ON at 1.0** so — unlike the stress runs — LR is the
+only thing that changes:
+
+- `configs/ablation_lr_3e-4.yaml` — `max_lr: 3e-4` (the original baseline)
+- `configs/ablation_lr_1e-3.yaml` — `max_lr: 1e-3`
+- `configs/ablation_lr_3e-3.yaml` — `max_lr: 3e-3`
+
+Grouped under `wandb_group: lr_sweep`.
+
+**Results (22k steps, Kaggle T4).**
+
+![LR sweep: val_loss, train_loss, tokens_per_sec, step, lr, grad_norm — the decisive 3e-4 → 1e-3 drop (3e-3 overlays 1e-3, see table) over 22k steps](assets/lr_sweep_charts.png)
+
+| Peak LR | val_loss (final) | train_loss (final) | grad_norm (final) |
+| --- | --- | --- | --- |
+| 3e-4 (baseline) | 1.601 | 1.682 | 0.68 |
+| **1e-3** | **1.559** | 1.626 | 0.37 |
+| 3e-3 | 1.557 | 1.617 | 0.27 |
+
+**Takeaway — the first ablation that actually moves the loss, and LR is the lever.**
+After three ties (norm, warmup, warmup-under-stress), this one shows a real effect:
+tripling-ish the LR from 3e-4 to 1e-3 cuts val_loss by **0.042** — ~20× the
+run-to-run noise that swallowed every earlier comparison. But the gain **saturates**:
+1e-3 → 3e-3 moves val_loss only 0.002 (noise), so it's a plateau, not a U-shape.
+The 3e-3 arm didn't diverge (clipping + AdamW's adaptive steps kept it stable — its
+final grad_norm is actually the lowest), it just bought nothing extra on validation.
+
+**`1e-3` is the new sweet spot:** it captures essentially all of the improvement
+while sitting further from the stability edge than 3e-3, which matters because
+higher LRs get riskier as the model scales. The original `3e-4` baseline was simply
+too conservative — a reminder that LR is worth tuning *before* chasing architectural
+knobs. Next step: promote `1e-3` to the baseline config and re-confirm on the full
+80k-step run before the scaling study.
 
 ## Acknowledgements
 
