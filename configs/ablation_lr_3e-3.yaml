@@ -1,0 +1,45 @@
+# =============================================================================
+# ablation_lr_3e-3.yaml — LR sweep, 3e-3 arm (~10x the baseline peak LR).
+#
+# The aggressive end of the sweep. Clipping held ON at 1.0; only max_lr / min_lr /
+# learning_rate differ from the other two arms. If this arm gets worse (or
+# diverges), it brackets the useful LR range from above. Same 22k budget.
+# =============================================================================
+
+run_name: lr_3e-3
+wandb_group: lr_sweep           # groups all three arms onto one W&B comparison
+wandb_tags: [lr_sweep, lr3e-3]
+
+# --- model ---------------------------------------------------------------
+hidden_size: 512
+num_layers: 8
+num_attention_heads: 8
+d_ff: 2048
+context_length: 256
+seq_len: 256
+vocab_size: 8000
+dropout_rate: 0.1
+activation_function: gelu
+norm_type: layernorm            # fixed at the Ablation 1 winner
+
+# --- optimization --------------------------------------------------------
+optimizer: AdamW
+learning_rate: 3.0e-3
+weight_decay: 0.1
+gradient_clip_norm: 1.0         # clipping ON (default) — isolates LR from the stress runs
+
+# --- schedule ------------------------------------------------------------
+warmup_steps: 2000              # fixed (Ablation 2 showed warmup length is a no-op here)
+max_steps: 22000                # ablation budget
+max_lr: 3.0e-3                  # <-- the swept knob
+min_lr: 3.0e-4                  # 10% of peak
+
+# --- logging / eval / checkpoint ----------------------------------------
+log_interval: 10
+eval_interval: 1000
+eval_iters: 100
+sample_interval: 2000
+ckpt_interval: 5000
+
+# --- data / runtime ------------------------------------------------------
+batch_size: 32
