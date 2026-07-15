@@ -57,7 +57,7 @@ Implemented and smoke-tested so far:
 - [x] Sampling / generation (`scripts/generate.py`, stops at end-of-text)
 - [x] Baseline trained: 30M model, 80k steps, **val_loss 1.43** (see [Results](#results))
 - [x] Config-selectable norm type + hand-written RMSNorm; **RMSNorm-vs-LayerNorm ablation trained** — quality tie, LayerNorm faster (see [Ablations](#ablations))
-- [x] Warmup-length ablation (50/500/2000) trained — negligible effect at this scale (see [Ablations](#ablations)); stress variant (high-LR, no-clip) running
+- [x] Warmup-length ablation (50/500/2000) + high-LR/no-clip stress variant trained — negligible effect at this scale; AdamW makes warmup redundant (see [Ablations](#ablations))
 - [ ] Scaling study, and write-up
 
 ## Tests
@@ -332,26 +332,57 @@ remaining ~90% is the identical cosine decay. So at this scale warmup is a no-op
 a legitimate (if anticlimactic) result: the baseline is already in a robust regime.
 
 That raises the obvious question — *when does warmup earn its keep?* Follow-up
-[stress ablation](#3-warmup-under-stress-when-warmup-earns-its-keep) removes the
-safety nets (10× LR, clipping off) to find out.
+[stress ablation](#3-warmup-under-stress) removes the safety nets (10× LR,
+clipping off) to find out.
 
-### 3. Warmup under stress (when warmup earns its keep)
+### 3. Warmup under stress
 
-**Status:** running — two 22k-step arms on a Kaggle T4.
+**Status:** complete — two 22k-step arms trained on a Kaggle T4.
 
 Ablation 2 showed warmup does nothing in the baseline's comfortable regime. This
-follow-up deliberately pushes the model toward instability so warmup has a job to
-do, then sweeps it again. Both arms fix the same **stress condition** — peak LR
+follow-up deliberately pushes the model toward instability to see whether warmup
+then starts to matter. Both arms fix the same **stress condition** — peak LR
 `1e-3` (10× the baseline) and gradient clipping **disabled** (`gradient_clip_norm:
-.inf`, wired through from config) — and vary only the warmup length:
+.inf`, wired through from config after fixing a hardcoded `max_norm=1.0`) — and
+vary only the warmup length:
 
 - `configs/ablation_warmup_stress_50.yaml` — `warmup_steps: 50`
 - `configs/ablation_warmup_stress_2000.yaml` — `warmup_steps: 2000`
 
-Grouped under `wandb_group: warmup_stress`. With clipping off, a short warmup
-should let the early gradients blow up (a `grad_norm` spike and a loss bump or
-outright divergence), while the long warmup should ramp in gently enough to stay
-stable — the contrast that shows *why* warmup exists. Results to follow.
+Grouped under `wandb_group: warmup_stress`. The hypothesis: with clipping off, the
+50-step arm should blow up early while the 2000-step arm ramps in gently.
+
+**Results (22k steps, Kaggle T4).**
+
+![Warmup stress ablation: val_loss, train_loss, tokens_per_sec, step, lr, grad_norm — warmup 50 vs 2000 at 10× LR with clipping disabled, over 22k steps](assets/warmup_stress_charts.png)
+
+| Metric | warmup 50 | warmup 2000 |
+| --- | --- | --- |
+| **val_loss** (final) | 1.553 | **1.549** |
+| train_loss (final) | 1.609 | 1.620 |
+| Throughput | ~39k tok/s | ~41k tok/s |
+| grad_norm (final) | 0.39 | 0.39 |
+
+**Takeaway — the hypothesis was wrong; warmup still doesn't matter.** Even with
+clipping removed and the LR cranked 10×, the two arms tie again (Δval_loss ≈ 0.004)
+and *neither diverges* — both train smoothly to convergence. The reason is the
+optimizer: **AdamW already normalizes every parameter's update by a running
+estimate of its own gradient magnitude, so the effective step size self-scales and
+is largely decoupled from raw gradient spikes.** That adaptive normalization does
+the very job warmup and clipping were meant to do, so removing clipping and raising
+the LR wasn't enough to break training. Warmup is essentially redundant with
+Adam-family optimizers at this scale — to actually make it earn its keep you'd
+likely need plain SGD, or a far more extreme LR.
+
+Two footnotes worth the reader's attention:
+
+- **The 10× LR *helped*.** Both stress arms (~1.55) beat every baseline-LR arm
+  (~1.59). The real lever at this scale isn't warmup, it's **peak learning rate** —
+  the conservative 3e-4 baseline was leaving quality on the table. A dedicated LR
+  sweep is the natural next experiment.
+- LR and clipping were changed together, so this cleanly shows *warmup* is robust
+  under aggressive optimization; isolating clipping's individual effect would need
+  extra arms.
 
 ## Acknowledgements
 
