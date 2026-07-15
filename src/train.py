@@ -235,7 +235,7 @@ def main():
         # the scaler step the optimizer (it skips the step if grads overflowed).
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
-        grad_norm = clip_grad_norm_(model.parameters(), max_norm=1.0)
+        grad_norm = clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
         scaler.step(optimizer)
         scaler.update()
 
