@@ -57,7 +57,8 @@ Implemented and smoke-tested so far:
 - [x] Sampling / generation (`scripts/generate.py`, stops at end-of-text)
 - [x] Baseline trained: 30M model, 80k steps, **val_loss 1.43** (see [Results](#results))
 - [x] Config-selectable norm type + hand-written RMSNorm; **RMSNorm-vs-LayerNorm ablation trained** — quality tie, LayerNorm faster (see [Ablations](#ablations))
-- [ ] Warmup ablation, scaling study, and write-up
+- [x] Warmup-length ablation (50/500/2000) trained — negligible effect at this scale (see [Ablations](#ablations)); stress variant (high-LR, no-clip) running
+- [ ] Scaling study, and write-up
 
 ## Tests
 
@@ -291,6 +292,66 @@ is several unfused tensor ops. That gap is an *implementation* artifact, not a
 property of RMSNorm — a fused RMSNorm (as used in Llama) would match or beat
 LayerNorm. Net: with this unfused RMSNorm, LayerNorm is the better default at
 this scale, so subsequent ablations fork from the LayerNorm arm.
+
+### 2. Warmup length
+
+**Status:** complete — three 22k-step arms trained on a Kaggle T4.
+
+The LR schedule is a linear warmup ramp (0 → peak over `warmup_steps`) followed
+by cosine decay to 10% of peak (`src/train.py`). Warmup is meant to prevent an
+early gradient blow-up while the model is still random and the LR is high. This
+ablation sweeps how long that ramp lasts, holding everything else fixed at the
+LayerNorm winner from Ablation 1:
+
+- `configs/ablation_warmup_50.yaml` — `warmup_steps: 50`
+- `configs/ablation_warmup_500.yaml` — `warmup_steps: 500`
+- `configs/ablation_warmup_2000.yaml` — `warmup_steps: 2000`
+
+All three share `wandb_group: warmup_ablation` and the same seed, so their `lr`
+ramps are the only thing that visibly differs early on.
+
+**Results (22k steps, Kaggle T4).**
+
+![Warmup ablation: val_loss, train_loss, tokens_per_sec, step, lr, grad_norm — warmup 50 vs 500 vs 2000 over 22k steps](assets/warmup_ablation_charts.png)
+
+| Metric | warmup 50 | warmup 500 | warmup 2000 |
+| --- | --- | --- | --- |
+| **val_loss** (final) | **1.590** | 1.599 | 1.601 |
+| train_loss (final) | 1.666 | 1.675 | 1.682 |
+| Throughput | ~40k tok/s | ~38k tok/s | ~40k tok/s |
+| grad_norm (final) | 0.72 | 0.69 | 0.68 |
+
+**Takeaway — warmup length doesn't matter here.** All three arms land within
+Δval_loss ≈ 0.011, i.e. run-to-run noise; if anything the *shortest* warmup edges
+ahead, the opposite of what warmup is "supposed" to buy. The reason is visible in
+the `grad_norm` panel: even the 50-step arm shows **no early spike** — gradient
+clipping (max-norm 1.0) already caps the one bad-batch shock that warmup exists to
+smooth, and at 30M params with a modest 3e-4 peak LR the model never approaches an
+instability boundary. Warmup only touches the first ≤2k of 22k steps anyway; the
+remaining ~90% is the identical cosine decay. So at this scale warmup is a no-op —
+a legitimate (if anticlimactic) result: the baseline is already in a robust regime.
+
+That raises the obvious question — *when does warmup earn its keep?* Follow-up
+[stress ablation](#3-warmup-under-stress-when-warmup-earns-its-keep) removes the
+safety nets (10× LR, clipping off) to find out.
+
+### 3. Warmup under stress (when warmup earns its keep)
+
+**Status:** running — two 22k-step arms on a Kaggle T4.
+
+Ablation 2 showed warmup does nothing in the baseline's comfortable regime. This
+follow-up deliberately pushes the model toward instability so warmup has a job to
+do, then sweeps it again. Both arms fix the same **stress condition** — peak LR
+`1e-3` (10× the baseline) and gradient clipping **disabled** (`gradient_clip_norm:
+.inf`, wired through from config) — and vary only the warmup length:
+
+- `configs/ablation_warmup_stress_50.yaml` — `warmup_steps: 50`
+- `configs/ablation_warmup_stress_2000.yaml` — `warmup_steps: 2000`
+
+Grouped under `wandb_group: warmup_stress`. With clipping off, a short warmup
+should let the early gradients blow up (a `grad_norm` spike and a loss bump or
+outright divergence), while the long warmup should ramp in gently enough to stay
+stable — the contrast that shows *why* warmup exists. Results to follow.
 
 ## Acknowledgements
 

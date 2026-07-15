@@ -1,0 +1,50 @@
+# =============================================================================
+# ablation_warmup_stress_50.yaml — Ablation 7.2b (warmup under stress), 50-step arm.
+#
+# The "make warmup matter" contrast to 7.2. Removes the safety nets that masked
+# warmup at baseline: LR is 10x higher (3e-3->... here 1e-3) AND gradient
+# clipping is disabled (gradient_clip_norm huge). Paired with the 2000-step arm;
+# warmup_steps is again the ONLY swept variable, high-LR + no-clip are the fixed
+# stress conditions shared by both arms.
+#
+# REQUIRES the train.py:238 change so gradient_clip_norm is read from config
+# (otherwise clip stays hardcoded at 1.0 and this run won't diverge).
+# =============================================================================
+
+run_name: warmup_stress_50
+wandb_group: warmup_stress      # groups both stress arms onto one W&B comparison
+wandb_tags: [warmup_stress, warmup50, highlr, noclip]
+
+# --- model ---------------------------------------------------------------
+hidden_size: 512
+num_layers: 8
+num_attention_heads: 8
+d_ff: 2048
+context_length: 256
+seq_len: 256
+vocab_size: 8000
+dropout_rate: 0.1
+activation_function: gelu
+norm_type: layernorm            # fixed at the Ablation 7.1 winner
+
+# --- optimization --------------------------------------------------------
+optimizer: AdamW
+learning_rate: 1.0e-3
+weight_decay: 0.1
+gradient_clip_norm: .inf        # clipping DISABLED (stress condition); still logs true grad_norm
+
+# --- schedule ------------------------------------------------------------
+warmup_steps: 50                # <-- the only knob that differs between arms
+max_steps: 22000                # same budget as 7.2 for apples-to-apples
+max_lr: 1.0e-3                  # 10x the baseline 3e-4 (stress condition)
+min_lr: 1.0e-4                  # keep the 10%-of-peak floor
+
+# --- logging / eval / checkpoint ----------------------------------------
+log_interval: 10
+eval_interval: 1000
+eval_iters: 100
+sample_interval: 2000
+ckpt_interval: 5000
+
+# --- data / runtime ------------------------------------------------------
+batch_size: 32
