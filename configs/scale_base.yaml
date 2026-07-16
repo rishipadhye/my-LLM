@@ -1,0 +1,46 @@
+# =============================================================================
+# scale_base.yaml — scaling study point 4 of 5 (~33.6M params, 25.2M non-embed).
+#
+# Same architecture as small.yaml (the promoted 1e-3 baseline), but at the
+# study's shared 40k-token budget so it sits ON the scaling curve. The full
+# 80k small.yaml run stays as a separate off-curve "fully trained" reference.
+# =============================================================================
+
+run_name: scale_base
+wandb_group: scaling_study
+
+# --- model (THE ONLY BLOCK THAT CHANGES ACROSS THE LADDER) ----------------
+hidden_size: 512            # width
+num_layers: 8               # depth
+num_attention_heads: 8      # head_dim = 512 / 8 = 64
+d_ff: 2048                  # 4 * hidden_size
+context_length: 256
+seq_len: 256
+vocab_size: 8000
+dropout_rate: 0.1
+activation_function: gelu
+norm_type: layernorm
+
+# --- optimization (held fixed across the ladder) -------------------------
+optimizer: AdamW
+learning_rate: 1.0e-3
+weight_decay: 0.1
+gradient_clip_norm: 1.0
+
+# --- schedule (fixed-token budget: 40k steps = ~328M tokens) -------------
+warmup_steps: 2000
+max_steps: 40000
+max_lr: 1.0e-3
+min_lr: 3.0e-5
+
+# --- logging / eval / checkpoint -----------------------------------------
+log_interval: 10
+eval_interval: 1000
+eval_iters: 100
+sample_interval: 2000
+ckpt_interval: 5000
+
+# --- data / runtime ------------------------------------------------------
+batch_size: 32
+
+# non-embed params = 12 * 8 * 512^2 = 25.17M ; total ~33.6M

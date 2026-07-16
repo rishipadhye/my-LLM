@@ -1,0 +1,43 @@
+# =============================================================================
+# scale_m.yaml — scaling study point 3 of 5 (~16.9M params, 10.6M non-embed).
+# See scale_xs.yaml for the study design; only the model block differs.
+# =============================================================================
+
+run_name: scale_m
+wandb_group: scaling_study
+
+# --- model (THE ONLY BLOCK THAT CHANGES ACROSS THE LADDER) ----------------
+hidden_size: 384            # width
+num_layers: 6               # depth
+num_attention_heads: 6      # head_dim = 384 / 6 = 64
+d_ff: 1536                  # 4 * hidden_size
+context_length: 256
+seq_len: 256
+vocab_size: 8000
+dropout_rate: 0.1
+activation_function: gelu
+norm_type: layernorm
+
+# --- optimization (held fixed across the ladder) -------------------------
+optimizer: AdamW
+learning_rate: 1.0e-3
+weight_decay: 0.1
+gradient_clip_norm: 1.0
+
+# --- schedule (fixed-token budget: 40k steps = ~328M tokens) -------------
+warmup_steps: 2000
+max_steps: 40000
+max_lr: 1.0e-3
+min_lr: 3.0e-5
+
+# --- logging / eval / checkpoint -----------------------------------------
+log_interval: 10
+eval_interval: 1000
+eval_iters: 100
+sample_interval: 2000
+ckpt_interval: 5000
+
+# --- data / runtime ------------------------------------------------------
+batch_size: 32
+
+# non-embed params = 12 * 6 * 384^2 = 10.62M ; total ~16.9M
