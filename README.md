@@ -55,7 +55,7 @@ Implemented and smoke-tested so far:
 - [x] Training loop (AdamW, warmup + cosine schedule, AMP, grad clipping, checkpointing, wandb)
 - [x] Kaggle T4 runner (notebook + tokenized Kaggle Dataset)
 - [x] Sampling / generation (`scripts/generate.py`, stops at end-of-text)
-- [x] Baseline trained: 30M model, 80k steps, **val_loss 1.43** (see [Results](#results))
+- [x] Baseline trained: 30M model, 80k steps, **val_loss 1.401** at `max_lr: 1e-3` (1.43 at the original 3e-4) (see [Results](#results))
 - [x] Config-selectable norm type + hand-written RMSNorm; **RMSNorm-vs-LayerNorm ablation trained** — quality tie, LayerNorm faster (see [Ablations](#ablations))
 - [x] Warmup-length ablation (50/500/2000) + high-LR/no-clip stress variant trained — negligible effect at this scale; AdamW makes warmup redundant (see [Ablations](#ablations))
 - [x] LR sweep (3e-4 / 1e-3 / 3e-3) — **peak LR is the real lever**: 1e-3 cuts val_loss 0.042 vs baseline, then plateaus (see [Ablations](#ablations))
@@ -214,7 +214,7 @@ warmup + cosine schedule (~4.5 h at ~42k tokens/sec):
 
 | Metric | Value |
 | --- | --- |
-| **val_loss** | **1.43** (train 1.46) |
+| **val_loss** | **1.401** (train 1.433) at `max_lr: 1e-3`; 1.43 at the original 3e-4 |
 | Throughput | ~42k tokens/sec (fp16 AMP, batch 32) |
 | Params | 33.6M |
 | Schedule | linear warmup (2k) → cosine decay to 10% of peak |
@@ -423,8 +423,18 @@ final grad_norm is actually the lowest), it just bought nothing extra on validat
 while sitting further from the stability edge than 3e-3, which matters because
 higher LRs get riskier as the model scales. The original `3e-4` baseline was simply
 too conservative — a reminder that LR is worth tuning *before* chasing architectural
-knobs. Next step: promote `1e-3` to the baseline config and re-confirm on the full
-80k-step run before the scaling study.
+knobs.
+
+**Re-confirmed on the full 80k run.** Promoting `max_lr: 1e-3` to `small.yaml` and
+re-running the complete 80k-step schedule carried the sweep's gain all the way
+through: **val_loss 1.401** (train 1.433), down from the original 3e-4 baseline's
+1.43. LR peaked cleanly at 0.001 and annealed to ~3e-5 under the cosine schedule,
+grad_norm settled around 0.46 with no instability, and throughput held at ~39k
+tokens/sec. The 22k-budget signal was real and scaled to the full run.
+
+![80k re-confirmation at max_lr 1e-3: val_loss 1.401, train_loss 1.433, tokens_per_sec ~39k, lr peak 0.001 → ~3e-5, grad_norm ~0.46](assets/baseline_80k_lr1e3_charts.png)
+
+This `1e-3` run is now the baseline the scaling study builds on.
 
 ## Acknowledgements
 
