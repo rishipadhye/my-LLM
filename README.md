@@ -60,6 +60,7 @@ Implemented and smoke-tested so far:
 - [x] Warmup-length ablation (50/500/2000) + high-LR/no-clip stress variant trained — negligible effect at this scale; AdamW makes warmup redundant (see [Ablations](#ablations))
 - [x] LR sweep (3e-4 / 1e-3 / 3e-3) — **peak LR is the real lever**: 1e-3 cuts val_loss 0.042 vs baseline, then plateaus (see [Ablations](#ablations))
 - [x] Scaling study — 5-point width+depth ladder (1.8M–56.6M non-embed) fit to `L ≈ 1.16 + 0.78·N^−0.276` (R² 0.9975); 80k diagnostic shows the floor is **compute-limited, not a data ceiling** (see [Scaling study](#scaling-study))
+- [x] Attention interpretability deep-dive — previous-token & attention-sink heads at both scales; induction only weakly emerging (see [Interpretability](#interpretability--what-the-attention-heads-learned))
 - [ ] Evaluation: custom TinyStories rubric (LLM-as-judge) + GPT-2 comparison
 - [ ] Technical blog post write-up
 
@@ -514,6 +515,68 @@ as an honest open thread.
 law; and holding LR fixed across a 32× param range is a mild confound at the
 extremes. Both are acceptable for a study whose point is the *shape* of the
 curve and the budget-vs-floor distinction, not a precise α.
+
+## Interpretability — what the attention heads learned
+
+**Status:** complete — attention patterns visualized from the trained `scale_xs`
+(1.8M) and `scale_l` (56.6M) checkpoints.
+
+Loss curves say *how well* a model does; they say nothing about *what it
+learned*. This section opens the hood. A one-line hook in `SelfAttention.forward`
+stashes the post-softmax attention weights (`self.last_attn`, shape
+`(batch, heads, T, T)`), so after a single forward pass on a prompt — on CPU, no
+GPU needed — every head's attention map can be read back and plotted
+(`scripts/viz_attention.py` for one head, `scripts/viz_attention_grid.py` for the
+whole model). Row `i` of a map is "where token `i` looks"; the dark upper triangle
+in every plot is the causal mask (no token attends to the future).
+
+**Finding 1 — clean positional heads.** Layer 0, head 0 of even the *smallest*
+model is a crisp **previous-token head**: every token attends to the one
+immediately before it (the bright sub-diagonal).
+
+![scale_xs layer 0 head 0 — a previous-token head: bright sub-diagonal, each token attending to its predecessor](assets/attn_xs_l0_h0.png)
+
+**Finding 2 — a recognizable head taxonomy, at both scales.** Plotting all heads
+at once (below, `scale_l`: 8 layers × 12 heads) reveals a division of labour:
+**previous-token** heads (sub-diagonal), **attend-to-self / identity** heads
+(main diagonal, e.g. L0 H11), **attention-sink** heads (a bright first column —
+nearly every token dumps attention onto the initial token), and diffuse
+context-mixing heads in the deeper layers. The larger model has a visibly richer
+taxonomy (a dedicated identity head, several content-selective heads), but the
+**core archetypes — previous-token and attention-sink — appear in the 1.8M model
+too.**
+
+![scale_l attention grid — 8 layers by 12 heads, showing previous-token, identity, attention-sink and diffuse context heads](assets/attn_grid_l.png)
+
+This is the interpretability payoff and it ties straight back to the project's
+thesis: **attention sinks and previous-token heads are the same circuits
+documented in GPT-scale models** — a 1.8M-parameter network trained only on
+children's stories independently rediscovers them. Same tricks, tiny scale.
+
+**Finding 3 (honest footnote) — induction is only *emerging*.** Induction heads
+(the copy/pattern-completion circuit: see a repeated token, attend to whatever
+followed its previous occurrence) are the natural next circuit up from
+previous-token heads. Probing with a repeated prompt (`"Once upon a time. Once
+upon a time"`) and scoring every head on the induction cells
+(`scripts/induction_score.py`):
+
+| Model | Layers | Top induction head | Score (chance ≈ 0.12) |
+| --- | --- | --- | --- |
+| `scale_xs` | 4 | L3 H1 | 0.254 |
+| `scale_l` | 8 | L4 H0 | 0.314 |
+
+Both models sit at ~2× chance — a mild, mid-layer induction *bias* — but neither
+approaches the 0.6+ of a *dedicated* induction head. `scale_l` scores a little
+higher, hinting at a scale trend, but a 0.06 gap on a single-prompt probe is
+within noise, so no firm claim is made. The likely reason there's no crisp
+circuit: TinyStories rarely rewards long-range verbatim copying, so there's
+little pressure to build one. A robust version would average the score over many
+random repeated-token sequences.
+
+**Caveat.** These maps are from a *single prompt / single forward pass*. The
+archetypes (previous-token, sink) are robust and visible immediately; any
+quantitative claim (the induction scores especially) would want averaging over
+many prompts to be publication-grade.
 
 ## Acknowledgements
 

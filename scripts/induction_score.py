@@ -9,7 +9,7 @@ from model import GPT
 from tokenizer import load_tokenizer 
 from paths import TOKENIZER_PATH   
 
-CHECKPOINT = "checkpoints/ckpt_scale_l.pt"
+CHECKPOINT = "checkpoints/ckpt_scale_xs.pt"
 PROMPT = "Once upon a time. Once upon a time"
 
 ckpt = torch.load(CHECKPOINT, map_location="cpu", weights_only=False)
@@ -31,17 +31,24 @@ with torch.no_grad():        # we don't need the logits — just the side effect
 n_layers = cfg.num_layers
 n_heads = cfg.num_attention_heads
 
-fig, axes = plt.subplots(n_layers, n_heads, figsize=(2.2 * n_heads, 2.2 * n_layers))
+induction_cells = []
+seen = {}
+for pos, tid in enumerate(ids):
+    if tid in seen:         # this token appeared before
+        target = seen[tid] + 1      # the position right after its first occurrence
+        if target < pos:        # guard: target must be a real earlier position
+            induction_cells.append((pos, target))
+    seen[tid] = pos     # remember where we last saw this token id
+print("induction cells (query_pos -> key_pos):", induction_cells)
 
+scores = []
 for layer in range(n_layers):
     for head in range(n_heads):
-        ax = axes[layer][head]
-        matrix = model.blocks[layer].attn.last_attn[0, head].numpy()
-        ax.imshow(matrix, cmap="viridis")
-        ax.set_title(f"L{layer} H{head}", fontsize=9)
-        ax.set_xticks([])
-        ax.set_yticks([])
+        A = model.blocks[layer].attn.last_attn[0, head]      # (T, T)
+        score = sum(A[q, k].item() for (q, k) in induction_cells) / len(induction_cells)
+        scores.append((score, layer, head))
 
-fig.suptitle(f"scale_l induction probe — '{PROMPT}'", fontsize=11)
-fig.savefig("assets/attn_grid_l_induction.png", dpi=150, bbox_inches="tight")
-print("saved to assets/attn_grid_l_induction.png")
+scores.sort(reverse=True)
+print("\ntop induction heads:")
+for score, layer, head in scores[:5]:
+    print(f"  L{layer} H{head}: {score:.3f}")
