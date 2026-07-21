@@ -9,6 +9,11 @@ The goal is to understand transformers deeply by implementing the core pieces by
 hand — model, training loop, data pipeline, and tokenizer — and then running a
 set of controlled experiments, ending in a technical write-up.
 
+> 📝 **Read the write-up:** [What a 30M-Parameter Language Model Taught Me About
+> Training LLMs](blog.md) — the narrative tour of the findings (training-trick
+> ablations, the scaling "floor" that wasn't, tiny-model circuits, and
+> specialization beating scale on-distribution).
+
 ## Highlights
 
 - **From scratch, no shortcuts.** The transformer is built directly on PyTorch
