@@ -61,7 +61,7 @@ Implemented and smoke-tested so far:
 - [x] LR sweep (3e-4 / 1e-3 / 3e-3) — **peak LR is the real lever**: 1e-3 cuts val_loss 0.042 vs baseline, then plateaus (see [Ablations](#ablations))
 - [x] Scaling study — 5-point width+depth ladder (1.8M–56.6M non-embed) fit to `L ≈ 1.16 + 0.78·N^−0.276` (R² 0.9975); 80k diagnostic shows the floor is **compute-limited, not a data ceiling** (see [Scaling study](#scaling-study))
 - [x] Attention interpretability deep-dive — previous-token & attention-sink heads at both scales; induction only weakly emerging (see [Interpretability](#interpretability--what-the-attention-heads-learned))
-- [ ] Evaluation: custom TinyStories rubric (LLM-as-judge) + GPT-2 comparison
+- [x] Evaluation: custom TinyStories rubric (LLM-as-judge, Llama-3.3-70B) + GPT-2 comparison — specialization beats scale on the target distribution (see [Evaluation](#evaluation--llm-as-judge--gpt-2-comparison))
 - [ ] Technical blog post write-up
 
 ## Tests
@@ -577,6 +577,61 @@ random repeated-token sequences.
 archetypes (previous-token, sink) are robust and visible immediately; any
 quantitative claim (the induction scores especially) would want averaging over
 many prompts to be publication-grade.
+
+## Evaluation — LLM-as-judge + GPT-2 comparison
+
+**Status:** complete — 30 stories (3 models × 10 prompts) scored by an LLM judge.
+
+Loss numbers don't tell you whether the stories are any *good*. Following the
+TinyStories paper's approach, each model continues 10 shared story prompts
+(`scripts/eval_generate.py`), and every continuation is scored 1–5 on six
+dimensions by an LLM judge — **Llama-3.3-70B via the free Groq API**
+(`scripts/eval_judge.py`, JSON mode, temperature 0). The judge is instructed to
+grade **fitness for a young child's story** (not raw sophistication) and to give
+honest strengths *and* weaknesses for every model. Two of our models
+(`scale_xs`, `scale_l`) are compared against **GPT-2 (124M)** — a general model
+~2× the size of our largest.
+
+![Per-dimension mean judge scores: scale_l best across the board, scale_xs middling, GPT-2 collapsing on the story dimensions](assets/eval_scores.png)
+
+| Dimension | scale_xs (1.8M) | scale_l (56.6M) | gpt2 (124M) |
+| --- | --- | --- | --- |
+| grammar | 3.60 | **4.30** | 2.70 |
+| fluency | 3.30 | **4.10** | 2.00 |
+| coherence | 2.60 | **4.00** | 1.10 |
+| contextual correctness | 3.20 | **4.20** | 1.20 |
+| creativity | 2.70 | **3.20** | 1.60 |
+| plot / completion | 3.50 | **4.30** | 1.00 |
+| **overall** | 3.15 | **4.02** | 1.60 |
+
+**Takeaway — specialization beats scale on the target distribution.** The
+56.6M model tuned on TinyStories decisively wins the children's-story task, and
+scores rise monotonically with our model size (3.15 → 4.02). **GPT-2, despite
+being larger, collapses on the *story* dimensions** — coherence 1.1, contextual
+correctness 1.2, plot 1.0 — because it drifts off-genre: police stations,
+inconsistent character names, dark themes unsuitable for a 3-year-old. The
+judge's own words: *"incoherent, inconsistent character names, unsuitable for a
+young child's story."* A model specialized for a narrow distribution beats a
+general model twice its size *at that distribution*.
+
+**Honest caveat.** GPT-2's grammar (2.70) and fluency (2.00) scores almost
+certainly *understate* its real linguistic quality — GPT-2's raw English is
+fluent, but the task-framed judge let the genre-drift bleed into the language
+scores (a halo effect). The defensible claim is narrower and truer: **GPT-2's
+weakness here is task-fit — coherence, genre, appropriateness — not language
+itself.** Its one genuine strength shows through too: the judge repeatedly noted
+GPT-2 *"attempts to introduce a new character and conflict"* — it is the more
+*ambitious* writer, it just can't stay on the rails of a simple story.
+
+**Per-model strengths / weaknesses:**
+
+- **scale_l** — *+* coherent, complete, age-appropriate, on-prompt story arcs; *−* predictable, thin conflict, occasional logic slips.
+- **scale_xs** — *+* stays in genre, decent grammar; *−* weaker coherence, characters appearing from nowhere.
+- **GPT-2** — *+* sophisticated vocabulary, ambitious plots; *−* off-genre drift, incoherent as a children's story, sometimes inappropriate.
+
+**Limitations.** One generation per prompt, 10 prompts, a single judge model —
+enough for a clear directional result, not a rigorous benchmark. More prompts,
+multiple judges, and multiple samples per prompt would tighten it.
 
 ## Acknowledgements
 
