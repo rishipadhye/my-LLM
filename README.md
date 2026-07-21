@@ -10,7 +10,8 @@ hand — model, training loop, data pipeline, and tokenizer — and then running
 set of controlled experiments, ending in a technical write-up.
 
 > 📝 **Read the write-up:** [What a 30M-Parameter Language Model Taught Me About
-> Training LLMs](blog.md) — the narrative tour of the findings (training-trick
+> Training LLMs](https://rishipadhye.github.io/tinystories-llm/) ([also in this
+> repo](blog.md)) — the narrative tour of the findings (training-trick
 > ablations, the scaling "floor" that wasn't, tiny-model circuits, and
 > specialization beating scale on-distribution).
 
