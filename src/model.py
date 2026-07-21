@@ -117,6 +117,7 @@ class SelfAttention(nn.Module):
 
         # Softmax over the last dim normalizes each query's row to sum to 1.
         attn = F.softmax(scores, dim=-1)  # (batch, num_heads, T, T)
+        self.last_attn = attn.detach()    # stash post-softmax weights (B, heads, T, T) for viz   
         attn = self.attn_dropout(attn)    # randomly zero some attention links
         # Weighted sum of values -> each head's context-mixed representation.
         out = attn @ v  # (batch, num_heads, T, head_dim)
