@@ -67,7 +67,7 @@ Implemented and smoke-tested so far:
 - [x] Scaling study — 5-point width+depth ladder (1.8M–56.6M non-embed) fit to `L ≈ 1.16 + 0.78·N^−0.276` (R² 0.9975); 80k diagnostic shows the floor is **compute-limited, not a data ceiling** (see [Scaling study](#scaling-study))
 - [x] Attention interpretability deep-dive — previous-token & attention-sink heads at both scales; induction only weakly emerging (see [Interpretability](#interpretability--what-the-attention-heads-learned))
 - [x] Evaluation: custom TinyStories rubric (LLM-as-judge, Llama-3.3-70B) + GPT-2 comparison — specialization beats scale on the target distribution (see [Evaluation](#evaluation--llm-as-judge--gpt-2-comparison))
-- [ ] Technical blog post write-up
+- [x] Technical blog post write-up
 
 ## Tests
 
