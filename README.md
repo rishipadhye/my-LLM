@@ -59,7 +59,9 @@ Implemented and smoke-tested so far:
 - [x] Config-selectable norm type + hand-written RMSNorm; **RMSNorm-vs-LayerNorm ablation trained** — quality tie, LayerNorm faster (see [Ablations](#ablations))
 - [x] Warmup-length ablation (50/500/2000) + high-LR/no-clip stress variant trained — negligible effect at this scale; AdamW makes warmup redundant (see [Ablations](#ablations))
 - [x] LR sweep (3e-4 / 1e-3 / 3e-3) — **peak LR is the real lever**: 1e-3 cuts val_loss 0.042 vs baseline, then plateaus (see [Ablations](#ablations))
-- [ ] Scaling study, and write-up
+- [x] Scaling study — 5-point width+depth ladder (1.8M–56.6M non-embed) fit to `L ≈ 1.16 + 0.78·N^−0.276` (R² 0.9975); 80k diagnostic shows the floor is **compute-limited, not a data ceiling** (see [Scaling study](#scaling-study))
+- [ ] Evaluation: custom TinyStories rubric (LLM-as-judge) + GPT-2 comparison
+- [ ] Technical blog post write-up
 
 ## Tests
 
@@ -198,9 +200,11 @@ CONFIG_PATH=configs/no_warmup.yaml python src/train.py
 
 | Experiment            | Variable            | Configs                     | Status |
 | --------------------- | ------------------- | --------------------------- | ------ |
-| Norm ablation         | RMSNorm vs LayerNorm| `ablation_norm_layernorm.yaml`, `ablation_norm_rmsnorm.yaml` | Done — loss tie; LayerNorm ~33% faster (unfused RMSNorm) |
-| Warmup ablation       | warmup_steps        | `configs/...`               | TODO   |
-| Scaling               | model size          | `configs/...`               | TODO   |
+| Norm ablation         | RMSNorm vs LayerNorm| `ablation_norm_{layernorm,rmsnorm}.yaml` | Done — loss tie; LayerNorm ~33% faster (unfused RMSNorm) |
+| Warmup length         | warmup_steps (50/500/2000) | `ablation_warmup_{50,500,2000}.yaml` | Done — null; warmup redundant with AdamW |
+| Warmup under stress   | warmup_steps @ 10× LR, no clip | `ablation_warmup_stress_{50,2000}.yaml` | Done — still null; neither diverges |
+| LR sweep              | max_lr (3e-4/1e-3/3e-3) | `ablation_lr_{3e-4,1e-3,3e-3}.yaml` | Done — 1e-3 best (−0.042); LR is the real lever |
+| Scaling               | model size (5-point ladder) + 80k diagnostic | `scale_{xs,s,m,base,l}.yaml`, `scale_l_80k.yaml` | Done — power-law fit; floor is compute-limited |
 
 ## Results
 
@@ -435,6 +439,81 @@ tokens/sec. The 22k-budget signal was real and scaled to the full run.
 ![80k re-confirmation at max_lr 1e-3: val_loss 1.401, train_loss 1.433, tokens_per_sec ~39k, lr peak 0.001 → ~3e-5, grad_norm ~0.46](assets/baseline_80k_lr1e3_charts.png)
 
 This `1e-3` run is now the baseline the scaling study builds on.
+
+## Scaling study
+
+**Status:** complete — a 5-point ladder plus one diagnostic run, all on a Kaggle T4.
+
+With the ablations settling the *training recipe* (LayerNorm, warmup irrelevant,
+`max_lr: 1e-3`), the question turns to **model size**: how does loss fall as the
+network grows, and where does it stop paying off? The study trains a ladder of
+five models that grow **width and depth together** (aspect ratio roughly fixed),
+holding everything else at the tuned recipe — a shared **fixed-token budget**
+(40k steps ≈ 328M tokens), `max_lr: 1e-3`, LayerNorm, warmup 2000, seed 1337,
+batch 32. Loss is fit against **non-embedding parameters** `N ≈ 12·layers·d²`
+(the attention + MLP compute, excluding the vocab-dominated embedding tables —
+the Kaplan et al. convention), so small-model totals aren't swamped by the fixed
+8k-token embedding.
+
+| Config | hidden / layers / heads | Non-embed N | Total params | val_loss (40k) |
+| --- | --- | --- | --- | --- |
+| `scale_xs.yaml`   | 192 / 4 / 3   | 1.77M  | 4.9M  | 1.826 |
+| `scale_s.yaml`    | 256 / 6 / 4   | 4.72M  | 8.9M  | 1.676 |
+| `scale_m.yaml`    | 384 / 6 / 6   | 10.62M | 16.9M | 1.555 |
+| `scale_base.yaml` | 512 / 8 / 8   | 25.17M | 33.6M | 1.487 |
+| `scale_l.yaml`    | 768 / 8 / 12  | 56.62M | 69.2M | 1.415 |
+
+All five share `wandb_group: scaling_study`, and no core code changed — `train.py`
+builds the model entirely from config fields, and the depth-aware residual init
+(`1/√(2·num_layers)`) adapts to each depth automatically.
+
+![Scaling study: log-log best val_loss vs non-embedding params — 5-point 40k ladder with a fitted floor power law, plus the off-curve 80k diagnostic point](assets/scaling_loglog.png)
+
+**A power law with a floor.** On log-log axes the five points are monotone but
+visibly *bent* — the slope shallows as `N` grows, which is the signature of an
+irreducible floor. Fitting `L = E + A·N^−α` by an **E-sweep** (grid-search the
+floor `E` and keep the value that makes `(L − E)` straightest on log-log — more
+robust than `curve_fit` with only five points) gives:
+
+> **L ≈ 1.16 + 0.78·N^−0.276**  (R² = 0.9975)
+
+The fit is excellent, and it's tempting to read `E = 1.16` as "TinyStories'
+irreducible loss." Each 10× in params roughly *halves* the gap to that floor
+(`10^−0.276 ≈ 0.53`), and extrapolating, reaching even `L = 1.30` would demand
+~500M non-embedding params — steeply diminishing returns.
+
+**But that floor is an artifact of the budget, not the data.** Every ladder point
+shares the same 40k-step budget, so the fitted `E` is really a *fixed-compute*
+floor. To test it, one diagnostic run (`scale_l_80k.yaml`) retrains the largest
+model for **double the budget** (80k steps, ≈656M tokens) — identical in every
+other respect:
+
+| Model | Non-embed N | Budget | val_loss |
+| --- | --- | --- | --- |
+| `scale_l` (on-curve) | 56.62M | 40k | 1.415 |
+| 30M baseline (reference) | 25.17M | 80k | 1.401 |
+| **`scale_l_80k`** | 56.62M | **80k** | **1.325** |
+
+Doubling the budget drops the largest model by **−0.090** (1.415 → 1.325),
+straight *through* the fitted 1.16-floor's neighbourhood and well past the
+fully-trained 30M baseline (by 0.076). Validation sat slightly *below* train
+loss (1.325 vs 1.352 — the dropout signature, not overfitting), so the data still
+had signal to give. The red arrow in the figure marks this drop off the curve.
+
+**Takeaway — the ladder's floor was compute-limited, not fundamental.** The
+clean bending power law looked like it was approaching an irreducible loss, but
+that apparent floor was conditioned on the training budget: give the biggest
+model 2× the compute and it punches right through. The real lesson is a
+cautionary one — **don't read an irreducible floor off an undertrained sweep.**
+TinyStories' true data ceiling is lower than 1.325 and was *not* reached here;
+finding it would take longer runs than a free T4 budget justifies, and it's left
+as an honest open thread.
+
+**Caveats.** The ladder points are near-converged, not compute-optimal
+(Chinchilla-style), so the fit is illustrative rather than a rigorous scaling
+law; and holding LR fixed across a 32× param range is a mild confound at the
+extremes. Both are acceptable for a study whose point is the *shape* of the
+curve and the budget-vs-floor distinction, not a precise α.
 
 ## Acknowledgements
 
